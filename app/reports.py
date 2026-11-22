@@ -82,7 +82,7 @@ def meerwerk(user, f):
     s, a = _filter_sql(f)
     p, pa = _periode(f, "r.created_at")
     rows = q(f"""SELECT r.id, r.jira_key, r.titel, r.status, r.geschatte_kosten, r.geschatte_uren, r.cab_besluit,
-                 k.naam klantnaam, ct.nummer contractnummer, ct.change_regime, o.status offerte_status, o.id offerte_id
+                 k.naam klantnaam, ct.nummer contractnummer, ct.change_regime, o.status offerte_status, o.id offerte_id, o.link offerte_link
                  FROM rfcs r JOIN klanten k ON k.id=r.klant_id JOIN contracten ct ON ct.id=r.contract_id
                  LEFT JOIN offertes o ON o.rfc_id=r.id WHERE r.binnen_contract='Nee' {s} {p} ORDER BY r.created_at DESC""", a + pa)
     if user["rol"] not in domain.WAARDE_ZICHTBAAR:

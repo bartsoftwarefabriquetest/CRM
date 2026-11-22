@@ -207,6 +207,8 @@ MIGRATIES = {
         ("besluitstijl", "TEXT"), ("houding", "TEXT"), ("invloed", "TEXT"), ("linkedin", "TEXT"),
         ("assistent", "TEXT"), ("zakelijke_interesses", "TEXT"), ("zakelijke_notities", "TEXT"),
     ],
+    # Offerte: hyperlink naar het document op SharePoint of Confluence
+    "offertes": [("link", "TEXT"), ("bijgewerkt", "TEXT"), ("bijgewerkt_door", "TEXT")],
 }
 
 

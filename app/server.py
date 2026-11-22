@@ -268,25 +268,24 @@ def sig_gelezen(req, user, sid):
 
 @route("GET", "/api/offertes")
 def offertes(req, user):
-    rows = q("""SELECT o.*, k.naam klantnaam, r.jira_key, r.titel FROM offertes o JOIN klanten k ON k.id=o.klant_id
-                JOIN rfcs r ON r.id=o.rfc_id ORDER BY o.id DESC""")
-    if user["rol"] not in domain.WAARDE_ZICHTBAAR:
-        for r in rows:
+    rows = q("""SELECT o.*, k.naam klantnaam, k.accountmanager_id am_klant, r.jira_key, r.titel FROM offertes o
+                JOIN klanten k ON k.id=o.klant_id JOIN rfcs r ON r.id=o.rfc_id ORDER BY o.id DESC""")
+    for r in rows:
+        domain._offerte_out(r)
+        r["mag_schrijven"] = domain.mag(user, "schrijven", "offerte", {"accountmanager_id": r["am_klant"]})
+        if user["rol"] not in domain.WAARDE_ZICHTBAAR:
             r["waarde"] = None
     return rows
 
 
 @route("PUT", r"/api/offertes/(\d+)")
 def offerte_upd(req, user, oid):
-    if user["rol"] not in ("accountmanager", "beheerder"):
-        raise Fout("Geen rechten", 403)
-    st = req.body.get("status")
-    if st not in ("Concept", "Verstuurd", "Geaccepteerd", "Afgewezen"):
-        raise Fout("Ongeldige status")
-    with tx() as c:
-        c.execute("UPDATE offertes SET status=?, waarde=COALESCE(?,waarde) WHERE id=?", (st, domain.num(req.body.get("waarde")), int(oid)))
-        domain.audit(c, user["naam"], "CRM", "offerte", int(oid), "status gewijzigd", {"status": st})
-    return {"ok": True}
+    return domain.offerte_wijzigen(user, int(oid), req.body)
+
+
+@route("POST", r"/api/rfcs/(\d+)/offertes")
+def offerte_nieuw(req, user, rid):
+    return domain.offerte_toevoegen(user, int(rid), req.body)
 
 
 @route("GET", r"/api/rapport/([a-z-]+)")

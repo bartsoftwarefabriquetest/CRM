@@ -62,7 +62,7 @@ def mag(user, actie, entiteit, record=None):
         return rol == "accountmanager" and eigen
     if entiteit == "contract":
         return (rol == "accountmanager" and eigen) or rol == "finance"
-    if entiteit == "opdracht":
+    if entiteit in ("opdracht", "offerte"):
         return rol == "accountmanager" and eigen
     if entiteit == "rfc":
         if actie == "aanmaken":
@@ -883,6 +883,9 @@ def rfcs(user, klant_id=None, contract_id=None, opdracht_id=None, status=None, c
              FROM rfcs r JOIN klanten k ON k.id=r.klant_id JOIN contracten ct ON ct.id=r.contract_id
              LEFT JOIN opdrachten o ON o.id=r.opdracht_id LEFT JOIN contactpersonen cp ON cp.id=r.aanvrager_id WHERE 1=1"""
     args = []
+    if status == "open":  # alles wat nog niet is afgerond
+        sql += " AND r.status NOT IN ('Gesloten','Afgewezen')"
+        status = None
     for col, v in (("r.klant_id", klant_id), ("r.contract_id", contract_id), ("r.opdracht_id", opdracht_id),
                    ("r.status", status), ("r.change_type", change_type)):
         if v:
@@ -908,7 +911,11 @@ def rfc(user, rid):
         ia["contractverschil"] = json.loads(ia["contractverschil"] or "null")
     r["betrokkenen"] = q("""SELECT rc.rol, cp.id, (cp.voornaam || ' ' || cp.achternaam) naam, cp.email FROM rfc_contacten rc
                            JOIN contactpersonen cp ON cp.id=rc.contact_id WHERE rc.rfc_id=?""", (rid,))
-    r["offertes"] = q("SELECT * FROM offertes WHERE rfc_id=?", (rid,))
+    r["offertes"] = [_offerte_out(o) for o in q("SELECT * FROM offertes WHERE rfc_id=? ORDER BY id", (rid,))]
+    r["mag_offerte"] = mag(user, "schrijven", "offerte", r)
+    if user["rol"] not in WAARDE_ZICHTBAAR:
+        for o in r["offertes"]:
+            o["waarde"] = None
     r["mag_schrijven"] = mag(user, "schrijven", "rfc", r)
     r["opmerkingen_aantal"] = opm_tellingen("rfc", [rid]).get(rid, 0)
     return r
@@ -957,6 +964,77 @@ def _meerwerk(c, rid):
               (rid, r["klant_id"], r["accountmanager_id"], f"Meerwerk: {r['titel']}", r["geschatte_kosten"], "Concept", now()))
     signaal(c, f"meerwerk:{rid}", "meerwerk", "rfc", rid,
             f"RFC '{r['titel']}' valt buiten contract ({r['jira_key'] or 'nog geen Jira-key'}): conceptofferte aangemaakt", r["accountmanager_id"])
+
+
+OFFERTE_STATUS = ["Concept", "Verstuurd", "Geaccepteerd", "Afgewezen"]
+
+
+def linkbron(url):
+    u = (url or "").lower()
+    if "sharepoint.com" in u or "onedrive" in u:
+        return "SharePoint"
+    if "atlassian.net/wiki" in u or "confluence" in u:
+        return "Confluence"
+    return "Document" if u else None
+
+
+def _offerte_data(data):
+    d = {}
+    if "status" in data:
+        if data["status"] not in OFFERTE_STATUS:
+            raise Fout("Ongeldige offertestatus")
+        d["status"] = data["status"]
+    if "waarde" in data:
+        d["waarde"] = num(data["waarde"])
+    if "omschrijving" in data:
+        d["omschrijving"] = (data["omschrijving"] or "").strip()
+        if not d["omschrijving"]:
+            raise Fout("Omschrijving is verplicht")
+    if "link" in data:
+        link = (data["link"] or "").strip() or None
+        if link:
+            if not re.match(r"^https://[^\s/]+\.[^\s/]+/\S*$", link, re.I):
+                raise Fout("De link moet een volledige https://-link zijn (bijv. naar SharePoint of Confluence)")
+            if len(link) > 2000:
+                raise Fout("De link is te lang")
+        d["link"] = link
+    return d
+
+
+def _offerte_out(o):
+    o["link_bron"] = linkbron(o.get("link"))
+    return o
+
+
+def offerte_toevoegen(user, rid, data):
+    r = q1("SELECT r.*, k.accountmanager_id FROM rfcs r JOIN klanten k ON k.id=r.klant_id WHERE r.id=?", (rid,))
+    if not r:
+        raise Fout("RFC niet gevonden", 404)
+    eis(user, "schrijven", "offerte", r)
+    d = {"status": "Concept", "omschrijving": f"Meerwerk: {r['titel']}", **_offerte_data(data)}
+    with tx() as c:
+        oid = c.execute("""INSERT INTO offertes(rfc_id,klant_id,accountmanager_id,omschrijving,waarde,status,link,ts,bijgewerkt,bijgewerkt_door)
+                           VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                        (rid, r["klant_id"], r["accountmanager_id"], d["omschrijving"], d.get("waarde"), d["status"], d.get("link"),
+                         now(), now(), user["naam"])).lastrowid
+        audit(c, user["naam"], "CRM", "rfc", rid, "offerte toegevoegd", {"offerte": d["omschrijving"], "link": d.get("link")})
+    return _offerte_out(q1("SELECT * FROM offertes WHERE id=?", (oid,)))
+
+
+def offerte_wijzigen(user, oid, data):
+    o = q1("SELECT o.*, k.accountmanager_id FROM offertes o JOIN klanten k ON k.id=o.klant_id WHERE o.id=?", (oid,))
+    if not o:
+        raise Fout("Offerte niet gevonden", 404)
+    eis(user, "schrijven", "offerte", o)
+    d = _offerte_data(data)
+    w = diff(o, d)
+    if not w:
+        return _offerte_out(o)
+    with tx() as c:
+        c.execute(f"UPDATE offertes SET {','.join(f'{k}=?' for k in d)}, bijgewerkt=?, bijgewerkt_door=? WHERE id=?",
+                  list(d.values()) + [now(), user["naam"], oid])
+        audit(c, user["naam"], "CRM", "rfc", o["rfc_id"], "offerte gewijzigd", w)
+    return _offerte_out(q1("SELECT * FROM offertes WHERE id=?", (oid,)))
 
 
 def rfc_aanmaken(user, data, bron="CRM", jira_key=None, gebruiker=None):

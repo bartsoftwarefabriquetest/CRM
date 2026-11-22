@@ -245,10 +245,10 @@ page("", async (main) => {
   main.innerHTML = head(`Goedemiddag, ${esc(S.user.naam.split(" ")[0])}`, new Date().toLocaleDateString("nl-NL", { weekday: "long", day: "numeric", month: "long" })) + `
   ${st.health !== "ok" ? `<div class="alert bad">Integratie verstoord: ${st.jira_offline ? "Jira niet bereikbaar — wijzigingen worden gebufferd" : ""} ${st.tellingen.dlq ? `${st.tellingen.dlq} bericht(en) in dead-letter queue` : ""}</div>` : ""}
   <div class="grid g4">
-    <div class="card stat"><div class="l">Open RFC's</div><div class="v">${open.length}</div><div class="small muted">${open.filter((r) => r.binnen_contract === "Nee").length} buiten contract</div></div>
-    <div class="card stat"><div class="l">Opzegmoment &lt; 6 mnd</div><div class="v">${opzeg.length}</div><div class="small muted">contracten</div></div>
-    <div class="card stat"><div class="l">Urenbudget ≥ 75%</div><div class="v">${uren.filter((u) => u.pct >= 75).length}</div><div class="small muted">contracten</div></div>
-    <div class="card stat"><div class="l">Sync-wachtrij</div><div class="v">${st.queue_diepte}</div><div class="small muted">${st.p95_sync_seconden != null ? `P95 ${st.p95_sync_seconden}s` : "geen recente sync"}</div></div>
+    <a class="card stat tile" href="#/rfcs?status=open"><div class="l">Open RFC's</div><div class="v">${open.length}</div><div class="small muted">${open.filter((r) => r.binnen_contract === "Nee").length} buiten contract</div></a>
+    <a class="card stat tile" href="#/contracten?signaal=opzeg"><div class="l">Opzegmoment &lt; 6 mnd</div><div class="v">${opzeg.length}</div><div class="small muted">contracten</div></a>
+    <a class="card stat tile" href="#/contracten?signaal=uren"><div class="l">Urenbudget ≥ 75%</div><div class="v">${uren.filter((u) => u.pct >= 75).length}</div><div class="small muted">contracten</div></a>
+    <a class="card stat tile" href="#/integratie${S.user.rol === "beheerder" ? "?tab=berichten" : ""}"><div class="l">Sync-wachtrij</div><div class="v">${st.queue_diepte}</div><div class="small muted">${st.p95_sync_seconden != null ? `P95 ${st.p95_sync_seconden}s` : "geen recente sync"}</div></a>
   </div>
   <div class="grid g21" style="margin-top:16px">
     <div class="stack">
@@ -262,7 +262,7 @@ page("", async (main) => {
     </div>
     <div class="stack">
       <div class="card"><h2>Signalen</h2>${sigList(sig.filter((s) => !s.gelezen).slice(0, 8))}<a href="#/signalen" class="small">Alle signalen →</a></div>
-      <div class="card"><h2>Changes</h2><dl class="kv"><dt>Totaal</dt><dd>${kpi.totaal}</dd><dt>Spoed</dt><dd>${kpi.spoed}</dd><dt>Succesratio</dt><dd>${kpi.succesratio == null ? "—" : kpi.succesratio + "%"}</dd><dt>Gem. risicoscore</dt><dd>${kpi.gem_risicoscore ?? "—"}</dd></dl></div>
+      <a class="card tile" href="#/rapportages?r=change-kpis"><h2>Changes</h2><dl class="kv"><dt>Totaal</dt><dd>${kpi.totaal}</dd><dt>Spoed</dt><dd>${kpi.spoed}</dd><dt>Succesratio</dt><dd>${kpi.succesratio == null ? "—" : kpi.succesratio + "%"}</dd><dt>Gem. risicoscore</dt><dd>${kpi.gem_risicoscore ?? "—"}</dd></dl></a>
     </div>
   </div>`;
   bindSig(main);
@@ -494,9 +494,17 @@ async function contractForm(rec, edit) {
 }
 page("contracten", async (main) => {
   const qs = S.qs;
-  const rows = await get(`/api/contracten?status=${encodeURIComponent(qs.status || "")}&soort=${encodeURIComponent(qs.soort || "")}&zoek=${encodeURIComponent(qs.zoek || "")}`);
+  let rows = await get(`/api/contracten?status=${encodeURIComponent(qs.status || "")}&soort=${encodeURIComponent(qs.soort || "")}&zoek=${encodeURIComponent(qs.zoek || "")}`);
   const can = ["accountmanager", "beheerder"].includes(S.user.rol);
-  main.innerHTML = head("Contracten", `${rows.length} contracten`, can ? '<button class="btn pri" id="new">Nieuw contract</button>' : "") + `<div class="card">
+  // Snelfilters vanaf de dashboardtegels
+  const SIGNAAL = {
+    opzeg: ["Opzegmoment binnen 6 maanden", (c) => ["Actief", "Verlengd"].includes(c.status) && c.dagen_tot_opzeg != null && c.dagen_tot_opzeg >= 0 && c.dagen_tot_opzeg <= 183],
+    uren: ["Urenbudget ≥ 75% verbruikt", (c) => c.uren_pct != null && c.uren_pct >= 75],
+  };
+  const sig = SIGNAAL[qs.signaal];
+  if (sig) rows = rows.filter(sig[1]).sort((a, b) => qs.signaal === "uren" ? b.uren_pct - a.uren_pct : a.dagen_tot_opzeg - b.dagen_tot_opzeg);
+  main.innerHTML = head("Contracten", `${rows.length} contracten`, can ? '<button class="btn pri" id="new">Nieuw contract</button>' : "") +
+    (sig ? `<div class="alert info filterchip">Filter: <b>${esc(sig[0])}</b> <a href="#/contracten">Filter wissen ✕</a></div>` : "") + `<div class="card">
     <div class="filters"><input id="fz" placeholder="Zoek op nummer of klant" value="${esc(qs.zoek || "")}"><select id="fs"><option value="">Alle statussen</option>${S.keuzes.contract_status.map((s) => `<option ${s === qs.status ? "selected" : ""}>${s}</option>`).join("")}</select>
     <select id="fo"><option value="">Alle soorten</option>${S.keuzes.contract_soort.map((s) => `<option ${s === qs.soort ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></div>
     ${table([{ l: "Nummer", f: (c) => `<a href="#/contracten/${c.id}">${esc(c.nummer)}</a>` }, { l: "Klant", k: "klantnaam" }, { l: "Soort", k: "soort" },
@@ -633,7 +641,7 @@ page("rfcs", async (main) => {
   main.innerHTML = head("RFC's", `${rows.length} wijzigingsverzoeken`, can ? '<button class="btn pri" id="new">Nieuwe RFC</button>' : "") + `<div class="card">
     <div class="filters"><input id="fz" placeholder="Zoek titel of Jira-key" value="${esc(qs.zoek || "")}">
     <select id="fk"><option value="">Alle klanten</option>${kl.map((k) => `<option value="${k.id}" ${k.id == qs.klant_id ? "selected" : ""}>${esc(k.naam)}</option>`).join("")}</select>
-    <select id="fs"><option value="">Alle statussen</option>${S.keuzes.rfc_status.map((s) => `<option ${s === qs.status ? "selected" : ""}>${s}</option>`).join("")}</select>
+    <select id="fs"><option value="">Alle statussen</option><option value="open" ${qs.status === "open" ? "selected" : ""}>Alle open</option>${S.keuzes.rfc_status.map((s) => `<option ${s === qs.status ? "selected" : ""}>${s}</option>`).join("")}</select>
     <select id="ft"><option value="">Alle types</option>${S.keuzes.change_type.map((s) => `<option ${s === qs.change_type ? "selected" : ""}>${s}</option>`).join("")}</select></div>
     ${rfcTable(rows)}</div>`;
   const go = () => (location.hash = "#/rfcs?" + new URLSearchParams({ zoek: $("#fz").value, klant_id: $("#fk").value, status: $("#fs").value, change_type: $("#ft").value }).toString());
@@ -651,6 +659,10 @@ page("rfcs/(\\d+)", async (main, id) => {
     (r.cab_vereist && !r.cab_besluit ? '<div class="alert">Risicoscore ≥ 15: CAB-behandeling vereist.</div>' : "") +
     tabs(main, [["overzicht", "Overzicht"], ["ia", `Impactanalyse (${r.impactanalyses.length})`], ["opmerkingen", opmLabel(r.opmerkingen_aantal)], ["audit", "Audit trail"]], tab) + '<div id="tab"></div>';
   bindTabs(main, (t) => (location.hash = `#/rfcs/${id}?tab=${t}`));
+  if (r.mag_offerte && tab === "overzicht") setTimeout(() => {
+    const n = $("#offnew"); if (n) n.onclick = () => offerteForm(null, r.id);
+    $$("[data-offe]").forEach((b) => (b.onclick = () => offerteForm(r.offertes.find((o) => o.id == b.dataset.offe))));
+  });
   if (r.mag_schrijven) { $("#edit").onclick = () => rfcForm(r, true); $("#toetsb").onclick = async () => { await act(() => post(`/api/rfcs/${id}/toets`), "Contracttoets uitgevoerd"); reload(); }; }
   const T = $("#tab");
   if (tab === "overzicht") {
@@ -660,7 +672,9 @@ page("rfcs/(\\d+)", async (main, id) => {
       <dt>Gewenste datum</dt><dd>${d(r.gewenste_datum)}</dd><dt>Bron</dt><dd>${badge(r.bron, r.bron === "Jira" ? "acc" : "")}</dd>
       <dt>Geschatte kosten / uren</dt><dd>${S.user.waarde_zichtbaar ? eur(r.geschatte_kosten) : hidden} / ${n0(r.geschatte_uren)} u</dd>
       <dt>CAB-besluit</dt><dd>${r.cab_besluit ? `${badge(r.cab_besluit)} ${d(r.cab_datum)}` : "—"}</dd><dt>Betrokkenen</dt><dd>${r.betrokkenen.map((b) => `${esc(b.naam)} <span class="muted small">(${esc(b.rol)})</span>`).join(", ") || "—"}</dd></dl></div>
-      ${r.offertes.length ? `<div class="card"><h2>Meerwerk</h2>${r.offertes.map((o) => `<div>${badge(o.status, "acc")} ${esc(o.omschrijving)} ${S.user.waarde_zichtbaar ? eur(o.waarde) : ""}</div>`).join("")}<a href="#/meerwerk" class="small">Naar meerwerk-pijplijn →</a></div>` : ""}</div>
+      ${r.offertes.length || r.mag_offerte ? `<div class="card"><div class="pagehead" style="margin:0 0 8px"><h2 style="margin:0">Offertes</h2>${r.mag_offerte ? '<div class="actions"><button class="btn sm" id="offnew">Offerte toevoegen</button></div>' : ""}</div>
+        ${r.offertes.map((o) => `<div class="offrow"><div>${badge(o.status, "acc")} <b>${esc(o.omschrijving)}</b> ${S.user.waarde_zichtbaar && o.waarde != null ? `<span class="muted">${eur(o.waarde)}</span>` : ""}<br>${offerteLink(o)}</div>${r.mag_offerte ? `<button class="btn sm" data-offe="${o.id}">${o.link ? "Bewerken" : "Link toevoegen"}</button>` : ""}</div>`).join("") || '<div class="empty">Nog geen offerte</div>'}
+        <a href="#/meerwerk" class="small">Naar meerwerk-pijplijn →</a></div>` : ""}</div>
       <div class="stack"><div class="card"><h2>Contracttoets ${badge(r.binnen_contract)}</h2>${toetsHtml(r.contracttoets)}<p class="small muted">Regime: ${esc(r.change_regime)} · SLA: ${dash(r.sla_niveau)}</p></div>
       <div class="card"><h2>Risico</h2>${ia ? `<div class="stat"><div class="v">${ia.risicoscore}</div><div class="l">kans ${ia.kans} × impact ${ia.impact} · versie ${ia.versie}</div></div>` : '<div class="empty">Nog geen impactanalyse (wordt in Jira ingevuld)</div>'}</div>
       <div class="card"><h2>Jira</h2><dl class="kv"><dt>Issue</dt><dd>${jira(r.jira_key)}</dd><dt>Sync</dt><dd>${sync(r.jira_sync_status)}</dd><dt>Laatste sync</dt><dd>${dt(r.last_sync)}</dd></dl></div></div></div>`;
@@ -685,14 +699,38 @@ function cvHtml(cv) {
 }
 
 // ================================================================ MEERWERK & SIGNALEN
+// ---------------------------------------------------------------- offertes (met link naar SharePoint/Confluence)
+const BRON_ICOON = { SharePoint: "📄", Confluence: "📘", Document: "🔗" };
+const offerteLink = (o) => o.link
+  ? `<a href="${esc(o.link)}" target="_blank" rel="noopener noreferrer" title="${esc(o.link)}">${BRON_ICOON[o.link_bron] || "🔗"} ${esc(o.link_bron || "Document")} ↗</a>`
+  : '<span class="muted small">geen link</span>';
+function offerteForm(rec, rfcId) {
+  const F = [
+    { n: "omschrijving", l: "Omschrijving", req: 1, full: 1 },
+    { n: "link", l: "Link naar offerte (SharePoint of Confluence)", t: "url", full: 1, ph: "https://jouwbedrijf.sharepoint.com/… of https://jouwbedrijf.atlassian.net/wiki/…",
+      hint: "Plak de deellink van het document. Zorg dat wie het moet zien er rechten op heeft." },
+    ...(S.user.waarde_zichtbaar ? [{ n: "waarde", l: "Waarde (EUR)", t: "number", step: "0.01" }] : []),
+    { n: "status", l: "Status", t: "select", req: 1, opts: ["Concept", "Verstuurd", "Geaccepteerd", "Afgewezen"] },
+  ];
+  modal(rec ? "Offerte bewerken" : "Offerte toevoegen", formHtml(F, rec || { status: "Concept" }), {
+    onSubmit: async (f) => {
+      const x = readForm(f, F);
+      rec ? await put(`/api/offertes/${rec.id}`, x) : await post(`/api/rfcs/${rfcId}/offertes`, x);
+      toast(rec ? "Offerte bijgewerkt" : "Offerte toegevoegd");
+      reload();
+    },
+  });
+}
+
 page("meerwerk", async (main) => {
   const [rows, off] = await Promise.all([get("/api/rapport/meerwerk"), get("/api/offertes")]);
   main.innerHTML = head("Meerwerk & offertes", "RFC's buiten contract") + `<div class="card"><h2>Offertes</h2>${table([{ l: "RFC", f: (o) => `<a href="#/rfcs/${o.rfc_id}">${esc(o.jira_key || "#" + o.rfc_id)}</a>` }, { l: "Omschrijving", k: "omschrijving" }, { l: "Klant", k: "klantnaam" },
     { l: "Waarde", num: 1, f: (o) => S.user.waarde_zichtbaar ? eur(o.waarde) : hidden }, { l: "Status", f: (o) => badge(o.status, "acc") },
-    { l: "", f: (o) => ["accountmanager", "beheerder"].includes(S.user.rol) ? `<select data-off="${o.id}">${["Concept", "Verstuurd", "Geaccepteerd", "Afgewezen"].map((s) => `<option ${s === o.status ? "selected" : ""}>${s}</option>`).join("")}</select>` : "" }], off)}</div>
+    { l: "Document", f: offerteLink }, { l: "Bijgewerkt", f: (o) => o.bijgewerkt ? `<span class="small">${dt(o.bijgewerkt)}<br><span class="muted">${esc(o.bijgewerkt_door || "")}</span></span>` : "—" },
+    { l: "", f: (o) => o.mag_schrijven ? `<button class="btn sm" data-off="${o.id}">${o.link ? "Bewerken" : "Link toevoegen"}</button>` : "" }], off)}</div>
     <div class="card" style="margin-top:16px"><h2>Pijplijn</h2>${table([{ l: "RFC", f: (r) => `<a href="#/rfcs/${r.id}">${esc(r.jira_key || "#" + r.id)}</a>` }, { l: "Titel", k: "titel" }, { l: "Klant", k: "klantnaam" }, { l: "Contract", k: "contractnummer" }, { l: "Regime", k: "change_regime" },
-      { l: "Geschat", num: 1, f: (r) => S.user.waarde_zichtbaar ? eur(r.geschatte_kosten) : hidden }, { l: "Status", f: (r) => badge(r.status) }, { l: "CAB", f: (r) => badge(r.cab_besluit) }, { l: "Offerte", f: (r) => badge(r.offerte_status, "acc") }], rows, (r) => "#/rfcs/" + r.id)}</div>`;
-  $$("[data-off]").forEach((s) => (s.onchange = async () => { await act(() => put(`/api/offertes/${s.dataset.off}`, { status: s.value }), "Offerte bijgewerkt"); reload(); }));
+      { l: "Geschat", num: 1, f: (r) => S.user.waarde_zichtbaar ? eur(r.geschatte_kosten) : hidden }, { l: "Status", f: (r) => badge(r.status) }, { l: "CAB", f: (r) => badge(r.cab_besluit) }, { l: "Offerte", f: (r) => r.offerte_status ? `${badge(r.offerte_status, "acc")}${r.offerte_link ? ` <a href="${esc(r.offerte_link)}" target="_blank" rel="noopener noreferrer" title="Offerte openen">↗</a>` : ""}` : "—" }], rows, (r) => "#/rfcs/" + r.id)}</div>`;
+  $$("[data-off]").forEach((b) => (b.onclick = () => offerteForm(off.find((o) => o.id == b.dataset.off))));
 });
 page("signalen", async (main) => {
   const s = await get("/api/signalen");
