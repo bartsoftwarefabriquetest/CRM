@@ -1,0 +1,7 @@
+# Lokale database en webhook-geheim (nooit committen)
+data/
+*.db
+*.secret
+__pycache__/
+*.pyc
+.DS_Store
