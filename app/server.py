@@ -101,6 +101,16 @@ def klant_act(req, user, kid):
     return domain.activiteit_toevoegen(user, int(kid), req.body)
 
 
+@route("GET", r"/api/contactpersonen/(\d+)")
+def cp_detail(req, user, cid):
+    return domain.contact(user, int(cid), details=True)
+
+
+@route("PUT", r"/api/contactpersonen/(\d+)/profiel")
+def cp_profiel(req, user, cid):
+    return domain.contact_profiel_opslaan(user, int(cid), req.body)
+
+
 @route("POST", "/api/contactpersonen")
 def cp_nieuw(req, user):
     return domain.contact_opslaan(user, req.body)

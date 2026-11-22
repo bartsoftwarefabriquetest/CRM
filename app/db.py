@@ -199,9 +199,30 @@ def add_months(d, m):
     return date(y, mo, min(d.day, calendar.monthrange(y, mo)[1]))
 
 
+MIGRATIES = {
+    # Profiel contactpersoon: persoonlijk (alleen commerciële rollen) en zakelijke voorkeuren
+    "contactpersonen": [
+        ("verjaardag", "TEXT"), ("persoonlijk_gezin", "TEXT"), ("persoonlijk_interesses", "TEXT"), ("persoonlijk_notities", "TEXT"),
+        ("voorkeur_taal", "TEXT"), ("voorkeur_contactmoment", "TEXT"), ("voorkeur_kanaal_detail", "TEXT"),
+        ("besluitstijl", "TEXT"), ("houding", "TEXT"), ("invloed", "TEXT"), ("linkedin", "TEXT"),
+        ("assistent", "TEXT"), ("zakelijke_interesses", "TEXT"), ("zakelijke_notities", "TEXT"),
+    ],
+}
+
+
+def _migreer(c):
+    """Voegt ontbrekende kolommen toe aan een bestaande database."""
+    for tabel, kolommen in MIGRATIES.items():
+        bestaand = {r[1] for r in c.execute(f"PRAGMA table_info({tabel})").fetchall()}
+        for naam, type_ in kolommen:
+            if naam not in bestaand:
+                c.execute(f"ALTER TABLE {tabel} ADD COLUMN {naam} {type_}")
+
+
 def init(seed=True):
     c = conn()
     c.executescript(SCHEMA)
+    _migreer(c)
     for k, v in DEFAULT_CONFIG.items():
         c.execute("INSERT OR IGNORE INTO config(sleutel, waarde) VALUES(?,?)", (k, json.dumps(v)))
     if seed and not q1("SELECT 1 x FROM users"):

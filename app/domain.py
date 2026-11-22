@@ -34,6 +34,9 @@ KEUZES = {
     "rfc_status": ["Nieuw", "Beoordeling", "CAB", "Goedgekeurd", "Afgewezen", "Uitgevoerd", "Gesloten"],
     "impact": ["Laag", "Midden", "Hoog"],
     "activiteit_type": ["Notitie", "E-mail", "Afspraak", "Telefoon"],
+    "taal": ["Nederlands", "Engels", "Duits", "Frans"],
+    "besluitstijl": ["Analytisch (cijfers en onderbouwing)", "Pragmatisch (snel en concreet)", "Relatiegericht (vertrouwen en draagvlak)", "Visionair (strategie en grote lijnen)"],
+    "houding": ["Ambassadeur", "Positief", "Neutraal", "Kritisch"],
 }
 ACTIEVE_CONTRACT = ("Actief", "Verlengd")
 JSM_ROLLEN = {"Technisch contact", "CAB-lid"}
@@ -83,11 +86,26 @@ def filter_contract(user, c):
     return c
 
 
+CP_PERSOONLIJK = ["verjaardag", "persoonlijk_gezin", "persoonlijk_interesses", "persoonlijk_notities"]
+CP_ZAKELIJK = ["voorkeur_taal", "voorkeur_contactmoment", "voorkeur_kanaal_detail", "besluitstijl", "houding", "invloed",
+               "linkedin", "assistent", "zakelijke_interesses", "zakelijke_notities"]
+PERSOONLIJK_ZICHTBAAR = {"accountmanager", "directie", "beheerder"}  # need-to-know: relatiebeheer
+
+
 def filter_contact(user, c):
-    if c and user["rol"] == "consultant":  # lezen (beperkt)
-        c = dict(c)
+    if not c:
+        return c
+    c = dict(c)
+    if user["rol"] == "consultant":  # lezen (beperkt)
         c["telefoon"] = None
         c["avg_grondslag"] = "(verborgen)"
+        for f in CP_ZAKELIJK:
+            c[f] = None
+        c["zakelijk_verborgen"] = True
+    if user["rol"] not in PERSOONLIJK_ZICHTBAAR:
+        for f in CP_PERSOONLIJK:
+            c[f] = None
+        c["persoonlijk_verborgen"] = True
     return c
 
 
@@ -422,11 +440,53 @@ def _cp_out(r):
     return r
 
 
-def contact(user, cid):
-    r = q1("SELECT * FROM contactpersonen WHERE id=?", (cid,))
+def contact(user, cid, details=False):
+    r = q1("""SELECT cp.*, k.naam klantnaam, k.accountmanager_id, k.status klantstatus FROM contactpersonen cp
+              JOIN klanten k ON k.id=cp.klant_id WHERE cp.id=?""", (cid,))
     if not r:
         raise Fout("Contactpersoon niet gevonden", 404)
-    return filter_contact(user, _cp_out(r))
+    r = filter_contact(user, _cp_out(r))
+    if details:
+        r["rfcs"] = q("""SELECT r.id, r.jira_key, r.titel, r.status, r.change_type, rc.rol FROM rfc_contacten rc
+                         JOIN rfcs r ON r.id=rc.rfc_id WHERE rc.contact_id=? ORDER BY r.created_at DESC""", (cid,))
+        r["opdrachten"] = q("""SELECT o.*, ct.nummer contractnummer FROM opdrachten o JOIN contracten ct ON ct.id=o.contract_id
+                               WHERE o.opdrachtgever_id=? ORDER BY o.startdatum DESC""", (cid,))
+        r["opmerkingen_aantal"] = opm_tellingen("contactpersoon", [cid]).get(cid, 0)
+        r["mag_schrijven"] = mag(user, "schrijven", "contactpersoon", r) and not r["geanonimiseerd"]
+    return r
+
+
+PROFIEL_KEUZES = {"voorkeur_taal": "taal", "besluitstijl": "besluitstijl", "houding": "houding", "invloed": "impact"}
+
+
+def contact_profiel_opslaan(user, cid, data):
+    """Persoonlijke informatie en zakelijke voorkeuren. Waarden komen niet in de audit trail (alleen veldnamen)
+    en worden nooit naar Jira gesynchroniseerd (NFR-PR-03)."""
+    oud = q1("SELECT cp.*, k.accountmanager_id FROM contactpersonen cp JOIN klanten k ON k.id=cp.klant_id WHERE cp.id=?", (cid,))
+    if not oud:
+        raise Fout("Contactpersoon niet gevonden", 404)
+    eis(user, "schrijven", "contactpersoon", oud)
+    if oud["geanonimiseerd"]:
+        raise Fout("Geanonimiseerde contactpersoon kan niet worden gewijzigd")
+    toegestaan = CP_ZAKELIJK + (CP_PERSOONLIJK if user["rol"] in PERSOONLIJK_ZICHTBAAR else [])
+    nieuw = {f: (str(data[f]).strip() or None) if data[f] is not None else None for f in toegestaan if f in data}
+    for veld, lijst in PROFIEL_KEUZES.items():
+        keuze(nieuw, veld, lijst)
+    if nieuw.get("verjaardag"):
+        pdate(nieuw["verjaardag"])
+    if nieuw.get("linkedin") and not re.match(r"^https://([a-z]{2,3}\.)?linkedin\.com/", nieuw["linkedin"], re.I):
+        raise Fout("LinkedIn moet een https://linkedin.com/…-adres zijn")
+    for f, v in nieuw.items():
+        if v and len(v) > 4000:
+            raise Fout(f"{f} is te lang (max. 4000 tekens)")
+    gewijzigd = [k for k in nieuw if (oud[k] or None) != nieuw[k]]
+    if not gewijzigd:
+        return contact(user, cid, details=True)
+    with tx() as c:
+        c.execute(f"UPDATE contactpersonen SET {','.join(f'{k}=?' for k in gewijzigd)}, updated_at=? WHERE id=?",
+                  [nieuw[k] for k in gewijzigd] + [now(), cid])
+        audit(c, user["naam"], "CRM", "contactpersoon", cid, "profiel bijgewerkt", {"velden": ", ".join(gewijzigd)})
+    return contact(user, cid, details=True)
 
 
 def contact_opslaan(user, data, cid=None):
@@ -489,8 +549,9 @@ def contact_anonimiseren(user, cid):
     oud = q1("SELECT cp.*, k.accountmanager_id FROM contactpersonen cp JOIN klanten k ON k.id=cp.klant_id WHERE cp.id=?", (cid,))
     eis(user, "schrijven", "contactpersoon", oud)
     with tx() as c:
-        c.execute("""UPDATE contactpersonen SET voornaam=NULL, achternaam=?, email=?, telefoon=NULL, functie=NULL,
-                     rollen='[]', actief=0, geanonimiseerd=1, updated_at=? WHERE id=?""",
+        profiel = ", ".join(f"{f}=NULL" for f in CP_PERSOONLIJK + CP_ZAKELIJK)
+        c.execute(f"""UPDATE contactpersonen SET voornaam=NULL, achternaam=?, email=?, telefoon=NULL, functie=NULL,
+                     rollen='[]', actief=0, geanonimiseerd=1, {profiel}, updated_at=? WHERE id=?""",
                   (f"Geanonimiseerd #{cid}", f"geanonimiseerd-{cid}@invalid.local", now(), cid))
         audit(c, user["naam"], "CRM", "contactpersoon", cid, "geanonimiseerd (AVG-verwijderverzoek)")
         if oud["jira_account_id"]:

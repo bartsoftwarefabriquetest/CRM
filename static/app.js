@@ -329,6 +329,82 @@ function cpForm(kid, rec) {
     onSubmit: async (f) => { const data = readForm(f, F); rec ? await put(`/api/contactpersonen/${rec.id}`, data) : await post("/api/contactpersonen", { ...data, klant_id: kid }); toast("Contactpersoon opgeslagen"); soon(); },
   });
 }
+// ================================================================ CONTACTPERSOON (detail + profiel)
+const zakelijkVelden = () => [
+  { n: "voorkeur_taal", l: "Voorkeurstaal", t: "select", opts: S.keuzes.taal },
+  { n: "voorkeur_contactmoment", l: "Beste contactmoment", ph: "bijv. di/do ochtend, niet op vrijdag" },
+  { n: "voorkeur_kanaal_detail", l: "Hoe benaderen", ph: "bijv. eerst mailen, daarna bellen; geen Teams", full: 1 },
+  { n: "besluitstijl", l: "Besluitvormingsstijl", t: "select", opts: S.keuzes.besluitstijl },
+  { n: "houding", l: "Houding t.o.v. ons", t: "select", opts: S.keuzes.houding },
+  { n: "invloed", l: "Invloed op besluiten", t: "select", opts: S.keuzes.impact },
+  { n: "linkedin", l: "LinkedIn", t: "url", ph: "https://www.linkedin.com/in/…" },
+  { n: "assistent", l: "Assistent / secretariaat", ph: "naam, e-mail of telefoon" },
+  { n: "zakelijke_interesses", l: "Zakelijke interesses en prioriteiten", t: "textarea", full: 1, ph: "Waar ligt deze persoon wakker van? Welke doelen?" },
+  { n: "zakelijke_notities", l: "Overige zakelijke notities", t: "textarea", full: 1 },
+];
+const persoonlijkVelden = () => [
+  { n: "verjaardag", l: "Verjaardag", t: "date" },
+  { n: "persoonlijk_gezin", l: "Gezin / thuissituatie", ph: "bijv. getrouwd, twee kinderen" },
+  { n: "persoonlijk_interesses", l: "Hobby's en interesses", t: "textarea", full: 1, ph: "bijv. wielrennen, Ajax-fan, kookt graag" },
+  { n: "persoonlijk_notities", l: "Persoonlijke notities", t: "textarea", full: 1 },
+];
+function profielForm(c) {
+  const toonPers = !c.persoonlijk_verborgen;
+  const Zk = zakelijkVelden(), P = toonPers ? persoonlijkVelden() : [];
+  const F = [...Zk, ...P];
+  const body = `<h3>Zakelijke voorkeuren</h3>${formHtml(Zk, c)}` + (toonPers
+    ? `<h3 style="margin-top:24px">Persoonlijk</h3><div class="alert info small">Leg alleen vast wat nodig is voor de relatie. Geen bijzondere persoonsgegevens (gezondheid, religie, politieke voorkeur e.d., AVG art. 9).</div>${formHtml(P, c)}`
+    : "");
+  modal(`Profiel — ${c.naam}`, body, { wide: 1, onSubmit: async (f) => { await put(`/api/contactpersonen/${c.id}/profiel`, readForm(f, F)); toast("Profiel opgeslagen"); reload(); } });
+}
+function verjaardagInfo(v) {
+  if (!v) return "—";
+  const b = new Date(v + "T00:00"), nu = new Date(); nu.setHours(0, 0, 0, 0);
+  const volgende = new Date(nu.getFullYear(), b.getMonth(), b.getDate());
+  if (volgende < nu) volgende.setFullYear(nu.getFullYear() + 1);
+  const dagen = Math.round((volgende - nu) / 864e5);
+  const dm = b.toLocaleDateString("nl-NL", { day: "numeric", month: "long" });
+  return `${esc(dm)} ${dagen === 0 ? badge("vandaag jarig!", "ok") : dagen <= 30 ? badge(`over ${dagen} dagen`, "warn") : `<span class="muted small">(over ${dagen} dagen)</span>`}`;
+}
+const nl2br = (v) => (v ? esc(v).replace(/\n/g, "<br>") : "—");
+page("contactpersonen/(\\d+)", async (main, id) => {
+  const c = await get("/api/contactpersonen/" + id);
+  const w = c.mag_schrijven;
+  const houdingTone = { Ambassadeur: "ok", Positief: "ok", Neutraal: "", Kritisch: "bad" };
+  main.innerHTML = head(esc(c.naam), `<span class="muted">${esc(c.functie || "")}${c.functie ? " · " : ""}<a href="#/klanten/${c.klant_id}">${esc(c.klantnaam)}</a></span> ${c.actief ? "" : badge("inactief")} ${c.geanonimiseerd ? badge("geanonimiseerd") : ""}`,
+    w ? `<button class="btn" id="edit">Gegevens wijzigen</button><button class="btn pri" id="prof">Profiel bewerken</button><button class="btn" id="act">${c.actief ? "Deactiveren" : "Activeren"}</button><button class="btn danger" id="anon">Anonimiseren</button>` : "",
+    `<a href="#/klanten/${c.klant_id}?tab=contacten">${esc(c.klantnaam)}</a> /`) + `
+  <div class="grid g3">
+    <div class="card"><h2>Contactgegevens</h2><dl class="kv">
+      <dt>E-mail</dt><dd>${c.email && !c.geanonimiseerd ? `<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>` : "—"}</dd>
+      <dt>Telefoon</dt><dd>${c.telefoon ? `<a href="tel:${esc(c.telefoon.replace(/[^+\d]/g, ""))}">${esc(c.telefoon)}</a>` : "—"}</dd>
+      <dt>Functie</dt><dd>${dash(c.functie)}</dd><dt>Voorkeurskanaal</dt><dd>${dash(c.communicatievoorkeur)}</dd>
+      <dt>Rollen</dt><dd>${c.rollen.map((r) => badge(r)).join(" ") || "—"}</dd><dt>AVG-grondslag</dt><dd>${dash(c.avg_grondslag)}</dd>
+      <dt>JSM-account</dt><dd>${c.jira_account_id ? `<span class="jira">${esc(c.jira_account_id)}</span>` : sync(c.jira_sync_status)}</dd></dl></div>
+    <div class="card"><h2>Zakelijke voorkeuren</h2>${c.zakelijk_verborgen ? `<div class="empty">${hidden}</div>` : `<dl class="kv">
+      <dt>Taal</dt><dd>${dash(c.voorkeur_taal)}</dd><dt>Contactmoment</dt><dd>${dash(c.voorkeur_contactmoment)}</dd><dt>Benadering</dt><dd>${dash(c.voorkeur_kanaal_detail)}</dd>
+      <dt>Besluitstijl</dt><dd>${dash(c.besluitstijl)}</dd><dt>Houding</dt><dd>${c.houding ? badge(c.houding, houdingTone[c.houding]) : "—"}</dd><dt>Invloed</dt><dd>${c.invloed ? badge(c.invloed, c.invloed === "Hoog" ? "acc" : "") : "—"}</dd>
+      <dt>LinkedIn</dt><dd>${c.linkedin ? `<a href="${esc(c.linkedin)}" target="_blank" rel="noopener noreferrer">profiel ↗</a>` : "—"}</dd><dt>Assistent</dt><dd>${dash(c.assistent)}</dd>
+      <dt>Interesses</dt><dd>${nl2br(c.zakelijke_interesses)}</dd><dt>Notities</dt><dd>${nl2br(c.zakelijke_notities)}</dd></dl>`}</div>
+    <div class="card"><h2>Persoonlijk</h2>${c.persoonlijk_verborgen ? `<div class="empty">${hidden}</div>` : `<dl class="kv">
+      <dt>Verjaardag</dt><dd>${verjaardagInfo(c.verjaardag)}</dd><dt>Gezin</dt><dd>${dash(c.persoonlijk_gezin)}</dd>
+      <dt>Hobby's</dt><dd>${nl2br(c.persoonlijk_interesses)}</dd><dt>Notities</dt><dd>${nl2br(c.persoonlijk_notities)}</dd></dl>
+      <p class="small muted" style="margin-bottom:0">Alleen zichtbaar voor accountmanagers, directie en beheer. Wordt niet naar Jira gesynchroniseerd en wordt gewist bij anonimiseren.</p>`}</div>
+  </div>
+  <div class="grid g21" style="margin-top:16px"><div class="stack">
+    <div class="card"><h2 data-opm-titel>${opmLabel(c.opmerkingen_aantal)}</h2><div id="opm"></div></div>
+    <div class="card"><h2>Audit trail</h2>${await auditHtml("contactpersoon", id)}</div></div>
+    <div class="stack"><div class="card"><h2>RFC's</h2>${c.rfcs.length ? c.rfcs.map((r) => `<div style="padding:4px 0"><a href="#/rfcs/${r.id}">${esc(r.jira_key || "#" + r.id)} ${esc(r.titel)}</a><br><span class="small">${badge(r.status)} <span class="muted">${esc(r.rol)}</span></span></div>`).join("") : '<div class="empty">Geen</div>'}</div>
+    <div class="card"><h2>Opdrachtgever van</h2>${c.opdrachten.length ? c.opdrachten.map((o) => `<div style="padding:4px 0"><a href="#/opdrachten/${o.id}">${esc(o.nummer)} ${esc(o.omschrijving)}</a><br><span class="small">${badge(o.status)} <span class="muted">${esc(o.contractnummer)}</span></span></div>`).join("") : '<div class="empty">Geen</div>'}</div></div></div>`;
+  await opmBlock($("#opm"), "contactpersoon", c.id);
+  if (w) {
+    $("#edit").onclick = () => cpForm(c.klant_id, c);
+    $("#prof").onclick = () => profielForm(c);
+    $("#act").onclick = async () => { await act(() => post(`/api/contactpersonen/${id}/${c.actief ? "deactiveren" : "activeren"}`), "Bijgewerkt; JSM-toegang wordt gesynchroniseerd"); soon(); };
+    $("#anon").onclick = async () => { if (confirm("AVG-verwijderverzoek uitvoeren? Alle persoonsgegevens, inclusief het profiel, worden onomkeerbaar gewist in het CRM en er gaat een verzoek naar Jira.")) { await act(() => post(`/api/contactpersonen/${id}/anonimiseren`), "Geanonimiseerd"); soon(); } };
+  }
+});
+
 page("klanten/(\\d+)", async (main, id) => {
   const k = await get("/api/klanten/" + id);
   const tab = S.qs.tab || "overzicht";
@@ -341,11 +417,11 @@ page("klanten/(\\d+)", async (main, id) => {
   bindTabs(main, (t) => (location.hash = `#/klanten/${id}?tab=${t}`));
   if (w) { $("#edit").onclick = () => klantForm(k); const a = $("#arch"); if (a) a.onclick = async () => { if (confirm("Klant archiveren? Records worden niet verwijderd.")) { await act(() => post(`/api/klanten/${id}/archiveren`), "Gearchiveerd"); reload(); } }; }
   const T = $("#tab");
-  const cpTable = () => table([{ l: "Naam", f: (c) => `${esc(c.naam)}${c.actief ? "" : ' <span class="badge">inactief</span>'}${c.geanonimiseerd ? ' <span class="badge">geanonimiseerd</span>' : ""}` },
+  const cpTable = () => table([{ l: "Naam", f: (c) => `<a href="#/contactpersonen/${c.id}">${esc(c.naam)}</a>${c.actief ? "" : ' <span class="badge">inactief</span>'}${c.geanonimiseerd ? ' <span class="badge">geanonimiseerd</span>' : ""}` },
     { l: "Functie", k: "functie" }, { l: "E-mail", k: "email" }, { l: "Telefoon", k: "telefoon" }, { l: "Rollen", f: (c) => c.rollen.map((r) => badge(r)).join(" ") },
     { l: "AVG", k: "avg_grondslag" }, { l: "JSM", f: (c) => c.jira_account_id ? `<span class="jira">${esc(c.jira_account_id)}</span>` : sync(c.jira_sync_status) },
     { l: "Opmerkingen", f: (c) => `<button class="btn sm" data-cpo="${c.id}" aria-label="Opmerkingen bij ${esc(c.naam)}">💬 ${c.opmerkingen_aantal || 0}</button>` },
-    ...(w ? [{ l: "", f: (c) => c.geanonimiseerd ? "" : `<button class="btn sm" data-cpe="${c.id}">Wijzig</button> <button class="btn sm" data-cpa="${c.id}" data-on="${c.actief}">${c.actief ? "Deactiveer" : "Activeer"}</button> <button class="btn sm danger" data-cpx="${c.id}" title="AVG-verwijderverzoek">Anonimiseer</button>` }] : [])], k.contactpersonen);
+    ...(w ? [{ l: "", f: (c) => c.geanonimiseerd ? "" : `<button class="btn sm" data-cpe="${c.id}">Wijzig</button> <button class="btn sm" data-cpa="${c.id}" data-on="${c.actief}">${c.actief ? "Deactiveer" : "Activeer"}</button> <button class="btn sm danger" data-cpx="${c.id}" title="AVG-verwijderverzoek">Anonimiseer</button>` }] : [])], k.contactpersonen, (c) => "#/contactpersonen/" + c.id);
   const ctTable = () => table([{ l: "Nummer", f: (c) => `<a href="#/contracten/${c.id}">${esc(c.nummer)}</a>` }, { l: "Soort", k: "soort" }, { l: "Looptijd", f: (c) => `${d(c.startdatum)} – ${c.onbepaalde_tijd ? "onbepaald" : d(c.einddatum)}` },
     { l: "Duur", num: 1, f: (c) => c.duur_maanden == null ? "—" : c.duur_maanden + " mnd" }, { l: "Waarde", num: 1, f: (c) => c.waarde_verborgen ? hidden : eur(c.waarde) },
     { l: "Uren", f: (c) => c.urenbudget ? `${bar(c.uren_pct)}<span class="small muted">${n0(c.bestede_uren)} / ${n0(c.urenbudget)}</span>` : "—" }, { l: "Regime", k: "change_regime" }, { l: "Status", f: (c) => badge(c.status) }, { l: "Jira", f: (c) => c.jira_key ? `<span class="jira">${esc(c.jira_key)}</span>` : sync(c.jira_sync_status) }], k.contracten, (c) => "#/contracten/" + c.id);
@@ -358,7 +434,7 @@ page("klanten/(\\d+)", async (main, id) => {
       <div class="stack"><div class="card"><h2>Gegevens</h2><dl class="kv"><dt>Bezoekadres</dt><dd>${dash(k.bezoekadres)}, ${dash(k.plaats)}</dd><dt>Postadres</dt><dd>${dash(k.postadres)}</dd>
         <dt>Factuuradres</dt><dd>${dash(k.factuuradres)}</dd><dt>BTW</dt><dd>${dash(k.btw)}</dd><dt>Branche</dt><dd>${dash(k.branche)}</dd><dt>Accountmanager</dt><dd>${dash(k.accountmanager)}</dd>
         <dt>JSM Organization</dt><dd>${k.jira_org_id ? `<span class="jira">org ${esc(k.jira_org_id)}</span>` : "—"}</dd><dt>Assets-object</dt><dd>${k.jira_key ? `<span class="jira">${esc(k.jira_key)}</span>` : "—"}</dd><dt>Sync</dt><dd>${sync(k.jira_sync_status)}</dd></dl></div>
-      <div class="card"><h2>Contactpersonen</h2>${k.contactpersonen.filter((c) => c.actief).map((c) => `<div style="padding:4px 0"><b>${esc(c.naam)}</b> <span class="muted small">${esc(c.functie || "")}</span><br><span class="small">${c.rollen.map((r) => badge(r)).join(" ")}</span></div>`).join("") || '<div class="empty">Geen</div>'}</div>
+      <div class="card"><h2>Contactpersonen</h2>${k.contactpersonen.filter((c) => c.actief).map((c) => `<div style="padding:4px 0"><a href="#/contactpersonen/${c.id}"><b>${esc(c.naam)}</b></a> <span class="muted small">${esc(c.functie || "")}</span><br><span class="small">${c.rollen.map((r) => badge(r)).join(" ")}</span></div>`).join("") || '<div class="empty">Geen</div>'}</div>
       <div class="card"><h2>Recente activiteit</h2>${timeline(k.tijdlijn.slice(0, 8))}</div></div></div>`;
   } else if (tab === "contacten") {
     T.innerHTML = `<div class="card">${w ? '<div class="filters"><button class="btn pri" id="cpn">Nieuwe contactpersoon</button></div>' : ""}${cpTable()}</div>`;
@@ -506,7 +582,7 @@ page("opdrachten/(\\d+)", async (main, id) => {
   main.innerHTML = head(esc(o.nummer), `${badge(o.status)} <span class="muted">${esc(o.type)} · <a href="#/klanten/${o.klant_id}">${esc(o.klantnaam)}</a> · <a href="#/contracten/${o.contract_id}">${esc(o.contractnummer)}</a></span>`,
     w ? `<button class="btn" id="edit">Wijzigen</button>${o.jira_epic_done && o.status !== "Afgerond" ? '<button class="btn pri" id="af">Afronden bevestigen</button>' : ""}` : "", '<a href="#/opdrachten">Opdrachten</a> /') +
     (o.jira_epic_done && o.status !== "Afgerond" ? '<div class="alert info">De Epic is in Jira op Done gezet. Bevestig het afronden van deze opdracht (FR-OP-04).</div>' : "") +
-    `<div class="grid g2"><div class="card"><h2>Opdracht</h2><p>${esc(o.omschrijving)}</p><dl class="kv"><dt>Periode</dt><dd>${d(o.startdatum)} – ${d(o.einddatum)}</dd><dt>Opdrachtgever</dt><dd>${dash(o.opdrachtgever)}</dd>
+    `<div class="grid g2"><div class="card"><h2>Opdracht</h2><p>${esc(o.omschrijving)}</p><dl class="kv"><dt>Periode</dt><dd>${d(o.startdatum)} – ${d(o.einddatum)}</dd><dt>Opdrachtgever</dt><dd>${o.opdrachtgever_id ? `<a href="#/contactpersonen/${o.opdrachtgever_id}">${esc(o.opdrachtgever)}</a>` : "—"}</dd>
       <dt>Budget</dt><dd>${S.user.waarde_zichtbaar ? eur(o.budget) : hidden}</dd><dt>Jira Epic</dt><dd>${jira(o.jira_key)} ${sync(o.jira_sync_status)}</dd></dl></div>
       <div class="card"><h2>Uitvoering (uit Jira)</h2><div class="grid g2"><div class="stat"><div class="l">Bestede uren</div><div class="v">${n0(o.bestede_uren)}</div><div class="small muted">van ${n0(o.begrote_uren)} begroot</div></div>
       <div class="stat"><div class="l">Voortgang</div><div class="v">${n0(o.voortgang)}%</div><div class="small muted">afgeronde issues</div></div></div>${o.begrote_uren ? bar(100 * o.bestede_uren / o.begrote_uren) : ""}</div></div>
@@ -580,7 +656,7 @@ page("rfcs/(\\d+)", async (main, id) => {
   if (tab === "overzicht") {
     T.innerHTML = `<div class="grid g21"><div class="stack"><div class="card"><h2>Wijziging</h2><p>${esc(r.omschrijving || "Geen omschrijving")}</p><dl class="kv">
       <dt>Klant</dt><dd><a href="#/klanten/${r.klant_id}">${esc(r.klantnaam)}</a></dd><dt>Contract</dt><dd><a href="#/contracten/${r.contract_id}">${esc(r.contractnummer)}</a> <span class="muted">${esc(r.contractsoort)} · t/m ${r.contract_einddatum ? d(r.contract_einddatum) : "onbepaald"}</span></dd>
-      <dt>Opdracht</dt><dd>${r.opdracht_id ? `<a href="#/opdrachten/${r.opdracht_id}">${esc(r.opdrachtnummer)}</a>` : "—"}</dd><dt>Aanvrager</dt><dd>${dash(r.aanvrager)}</dd>
+      <dt>Opdracht</dt><dd>${r.opdracht_id ? `<a href="#/opdrachten/${r.opdracht_id}">${esc(r.opdrachtnummer)}</a>` : "—"}</dd><dt>Aanvrager</dt><dd>${r.aanvrager_id ? `<a href="#/contactpersonen/${r.aanvrager_id}">${esc(r.aanvrager)}</a>` : "—"}</dd>
       <dt>Gewenste datum</dt><dd>${d(r.gewenste_datum)}</dd><dt>Bron</dt><dd>${badge(r.bron, r.bron === "Jira" ? "acc" : "")}</dd>
       <dt>Geschatte kosten / uren</dt><dd>${S.user.waarde_zichtbaar ? eur(r.geschatte_kosten) : hidden} / ${n0(r.geschatte_uren)} u</dd>
       <dt>CAB-besluit</dt><dd>${r.cab_besluit ? `${badge(r.cab_besluit)} ${d(r.cab_datum)}` : "—"}</dd><dt>Betrokkenen</dt><dd>${r.betrokkenen.map((b) => `${esc(b.naam)} <span class="muted small">(${esc(b.rol)})</span>`).join(", ") || "—"}</dd></dl></div>

@@ -128,7 +128,7 @@ def zoeken(user, term):
         res.append({"type": "Klant", "id": r["id"], "titel": r["naam"], "sub": f"{r['nummer']} · {r['plaats'] or ''}", "link": f"#/klanten/{r['id']}"})
     for r in q("""SELECT cp.id, cp.klant_id, cp.voornaam, cp.achternaam, cp.email, k.naam FROM contactpersonen cp JOIN klanten k ON k.id=cp.klant_id
                   WHERE cp.achternaam LIKE ? OR cp.voornaam LIKE ? OR cp.email LIKE ? LIMIT 10""", (t,) * 3):
-        res.append({"type": "Contactpersoon", "id": r["id"], "titel": f"{r['voornaam'] or ''} {r['achternaam']}", "sub": f"{r['email']} · {r['naam']}", "link": f"#/klanten/{r['klant_id']}"})
+        res.append({"type": "Contactpersoon", "id": r["id"], "titel": f"{r['voornaam'] or ''} {r['achternaam']}", "sub": f"{r['email']} · {r['naam']}", "link": f"#/contactpersonen/{r['id']}"})
     for r in q("SELECT ct.id, ct.nummer, ct.soort, k.naam FROM contracten ct JOIN klanten k ON k.id=ct.klant_id WHERE ct.nummer LIKE ? OR ct.jira_key LIKE ? OR k.naam LIKE ? LIMIT 10", (t,) * 3):
         res.append({"type": "Contract", "id": r["id"], "titel": r["nummer"], "sub": f"{r['soort']} · {r['naam']}", "link": f"#/contracten/{r['id']}"})
     for r in q("SELECT id, nummer, omschrijving, jira_key FROM opdrachten WHERE nummer LIKE ? OR omschrijving LIKE ? OR jira_key LIKE ? LIMIT 10", (t,) * 3):
