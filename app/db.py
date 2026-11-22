@@ -120,6 +120,11 @@ CREATE TABLE IF NOT EXISTS impactanalyses(
   impact_contract TEXT, security_privacy TEXT, dpia_nodig INTEGER DEFAULT 0, terugvalplan TEXT,
   opgesteld_door TEXT, datum TEXT, contractverschil TEXT);
 
+CREATE TABLE IF NOT EXISTS opmerkingen(
+  id INTEGER PRIMARY KEY, entiteit TEXT NOT NULL, entiteit_id INTEGER NOT NULL, tekst TEXT NOT NULL,
+  gebruiker_id INTEGER REFERENCES users(id), gebruiker TEXT, ts TEXT, bewerkt TEXT, verwijderd INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS ix_opm ON opmerkingen(entiteit, entiteit_id);
+
 CREATE TABLE IF NOT EXISTS activiteiten(
   id INTEGER PRIMARY KEY, klant_id INTEGER REFERENCES klanten(id), type TEXT, tekst TEXT, gebruiker TEXT, ts TEXT);
 

@@ -277,8 +277,12 @@ def klant(user, kid):
                            WHERE ct.klant_id=? ORDER BY o.startdatum DESC""", (kid,))
     k["rfcs"] = q("""SELECT r.*, ct.nummer contractnummer FROM rfcs r JOIN contracten ct ON ct.id=r.contract_id
                      WHERE r.klant_id=? ORDER BY r.created_at DESC""", (kid,))
+    n = opm_tellingen("contactpersoon", [c["id"] for c in k["contactpersonen"]])
+    for c in k["contactpersonen"]:
+        c["opmerkingen_aantal"] = n.get(c["id"], 0)
     k["tijdlijn"] = tijdlijn(kid)
     k["mag_schrijven"] = mag(user, "schrijven", "klant", k)
+    k["opmerkingen_aantal"] = opm_tellingen("klant", [kid]).get(kid, 0)
     return k
 
 
@@ -302,7 +306,98 @@ def tijdlijn(kid):
             items.append({"ts": a["ts"], "type": "Jira" if a["bron"] != "CRM" else "Wijziging",
                           "tekst": f"{ent} #{a['entiteit_id']} {a['actie']}" + (f" — {samenvatting}" if samenvatting else ""),
                           "door": a["gebruiker"], "bron": a["bron"]})
+        for o in q(f"SELECT * FROM opmerkingen WHERE verwijderd=0 AND entiteit=? AND entiteit_id IN ({','.join('?' * len(lst))})", [ent] + lst):
+            items.append({"ts": o["ts"], "type": "Opmerking", "tekst": f"{opm_label(ent, o['entiteit_id'])}: {o['tekst'][:300]}",
+                          "door": o["gebruiker"], "bron": "CRM"})
     return sorted(items, key=lambda x: x["ts"], reverse=True)[:80]
+
+
+# ================================================================ OPMERKINGEN
+OPM_TABELLEN = {"klant": "klanten", "contactpersoon": "contactpersonen", "contract": "contracten", "opdracht": "opdrachten", "rfc": "rfcs"}
+OPM_MAX = 5000
+
+
+def opm_label(ent, eid):
+    r = q1(f"SELECT * FROM {OPM_TABELLEN[ent]} WHERE id=?", (eid,)) or {}
+    if ent == "klant":
+        return f"Klant {r.get('naam', eid)}"
+    if ent == "contactpersoon":
+        return f"Contactpersoon {(r.get('voornaam') or '') + ' ' + (r.get('achternaam') or '')}".strip()
+    if ent == "rfc":
+        return f"RFC {r.get('jira_key') or '#' + str(eid)}"
+    return f"{ent.capitalize()} {r.get('nummer', eid)}"
+
+
+def opm_tellingen(ent, ids):
+    if not ids:
+        return {}
+    return {r["entiteit_id"]: r["n"] for r in q(
+        f"SELECT entiteit_id, COUNT(*) n FROM opmerkingen WHERE verwijderd=0 AND entiteit=? AND entiteit_id IN ({','.join('?' * len(ids))}) GROUP BY entiteit_id",
+        [ent] + list(ids))}
+
+
+def _opm_record(ent, eid):
+    if ent not in OPM_TABELLEN:
+        raise Fout(f"Opmerkingen niet mogelijk op '{ent}'")
+    if not q1(f"SELECT id FROM {OPM_TABELLEN[ent]} WHERE id=?", (eid,)):
+        raise Fout("Record niet gevonden", 404)
+
+
+def opmerkingen(user, ent, eid):
+    _opm_record(ent, eid)
+    rows = q("SELECT * FROM opmerkingen WHERE entiteit=? AND entiteit_id=? AND verwijderd=0 ORDER BY id DESC", (ent, eid))
+    for r in rows:
+        r["eigen"] = r["gebruiker_id"] == user["id"]
+        r["mag_beheren"] = r["eigen"] or user["rol"] == "beheerder"
+    return rows
+
+
+def _opm_tekst(tekst):
+    tekst = (tekst or "").strip()
+    if not tekst:
+        raise Fout("Opmerking is leeg")
+    if len(tekst) > OPM_MAX:
+        raise Fout(f"Opmerking is te lang (max. {OPM_MAX} tekens)")
+    return tekst
+
+
+def opmerking_plaatsen(user, ent, eid, tekst):
+    """Iedere ingelogde gebruiker die het record mag lezen, mag een opmerking plaatsen."""
+    _opm_record(ent, eid)
+    tekst = _opm_tekst(tekst)
+    with tx() as c:
+        oid = c.execute("INSERT INTO opmerkingen(entiteit,entiteit_id,tekst,gebruiker_id,gebruiker,ts) VALUES(?,?,?,?,?,?)",
+                        (ent, eid, tekst, user["id"], user["naam"], now())).lastrowid
+        audit(c, user["naam"], "CRM", ent, eid, "opmerking geplaatst", {"opmerking": tekst[:200]})
+    return q1("SELECT * FROM opmerkingen WHERE id=?", (oid,))
+
+
+def _opm_eigen(user, oid):
+    o = q1("SELECT * FROM opmerkingen WHERE id=? AND verwijderd=0", (oid,))
+    if not o:
+        raise Fout("Opmerking niet gevonden", 404)
+    if o["gebruiker_id"] != user["id"] and user["rol"] != "beheerder":
+        raise Fout("Je kunt alleen je eigen opmerkingen wijzigen of verwijderen", 403)
+    return o
+
+
+def opmerking_wijzigen(user, oid, tekst):
+    o = _opm_eigen(user, oid)
+    tekst = _opm_tekst(tekst)
+    with tx() as c:
+        c.execute("UPDATE opmerkingen SET tekst=?, bewerkt=? WHERE id=?", (tekst, now(), oid))
+        audit(c, user["naam"], "CRM", o["entiteit"], o["entiteit_id"], "opmerking gewijzigd",
+              {"opmerking": {"oud": o["tekst"][:200], "nieuw": tekst[:200]}})
+    return {"ok": True}
+
+
+def opmerking_verwijderen(user, oid):
+    """Zacht verwijderen: de tekst blijft voor de audit trail bewaard."""
+    o = _opm_eigen(user, oid)
+    with tx() as c:
+        c.execute("UPDATE opmerkingen SET verwijderd=1, bewerkt=? WHERE id=?", (now(), oid))
+        audit(c, user["naam"], "CRM", o["entiteit"], o["entiteit_id"], "opmerking verwijderd", {"opmerking": o["tekst"][:200]})
+    return {"ok": True}
 
 
 def activiteit_toevoegen(user, kid, data):
@@ -460,6 +555,7 @@ def contract(user, cid):
     r["opdrachten"] = q("SELECT * FROM opdrachten WHERE contract_id=? ORDER BY nummer", (cid,))
     r["rfcs"] = q("SELECT * FROM rfcs WHERE contract_id=? ORDER BY created_at DESC", (cid,))
     r["mag_schrijven"] = mag(user, "schrijven", "contract", r)
+    r["opmerkingen_aantal"] = opm_tellingen("contract", [cid]).get(cid, 0)
     r = filter_contract(user, r)
     if r.get("waarde_verborgen"):
         for v in r["versies"]:
@@ -651,6 +747,7 @@ def opdracht(user, oid):
         r["budget"] = None
     r["rfcs"] = q("SELECT * FROM rfcs WHERE opdracht_id=?", (oid,))
     r["mag_schrijven"] = mag(user, "schrijven", "opdracht", r)
+    r["opmerkingen_aantal"] = opm_tellingen("opdracht", [oid]).get(oid, 0)
     return r
 
 
@@ -752,6 +849,7 @@ def rfc(user, rid):
                            JOIN contactpersonen cp ON cp.id=rc.contact_id WHERE rc.rfc_id=?""", (rid,))
     r["offertes"] = q("SELECT * FROM offertes WHERE rfc_id=?", (rid,))
     r["mag_schrijven"] = mag(user, "schrijven", "rfc", r)
+    r["opmerkingen_aantal"] = opm_tellingen("rfc", [rid]).get(rid, 0)
     return r
 
 

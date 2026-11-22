@@ -217,6 +217,26 @@ def zoeken(req, user):
     return reports.zoeken(user, req.qs.get("q", ""))
 
 
+@route("GET", r"/api/opmerkingen/(klant|contactpersoon|contract|opdracht|rfc)/(\d+)")
+def opm_lijst(req, user, ent, eid):
+    return domain.opmerkingen(user, ent, int(eid))
+
+
+@route("POST", r"/api/opmerkingen/(klant|contactpersoon|contract|opdracht|rfc)/(\d+)")
+def opm_nieuw(req, user, ent, eid):
+    return domain.opmerking_plaatsen(user, ent, int(eid), req.body.get("tekst"))
+
+
+@route("PUT", r"/api/opmerkingen/(\d+)")
+def opm_upd(req, user, oid):
+    return domain.opmerking_wijzigen(user, int(oid), req.body.get("tekst"))
+
+
+@route("POST", r"/api/opmerkingen/(\d+)/verwijderen")
+def opm_del(req, user, oid):
+    return domain.opmerking_verwijderen(user, int(oid))
+
+
 @route("GET", "/api/audit")
 def audit(req, user):
     return q("SELECT * FROM audit WHERE entiteit=? AND entiteit_id=? ORDER BY id DESC", (req.qs.get("entiteit"), req.qs.get("id")))

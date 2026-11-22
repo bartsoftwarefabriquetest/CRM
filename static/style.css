@@ -122,6 +122,14 @@ pre { background: var(--line2); padding: 10px; border-radius: 6px; overflow: aut
 .simissue { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; margin-bottom: 10px; }
 .simissue .row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 .menu-btn { display: none; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.opm-new textarea, .opm-tekst textarea { width: 100%; min-height: 76px; resize: vertical; }
+.opm-bar { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+.opm-list { list-style: none; margin: 16px 0 0; padding: 0; }
+.opm-list li { padding: 12px 0; border-top: 1px solid var(--line2); }
+.opm-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.opm-act { margin-left: auto; display: flex; gap: 6px; }
+.opm-tekst { margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 @media (max-width: 1000px) {
   .g4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .g3, .g21 { grid-template-columns: 1fr; }

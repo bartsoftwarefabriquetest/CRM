@@ -81,7 +81,7 @@ function modal(title, body, { submit = "Opslaan", onSubmit, wide } = {}) {
   const dlg = $("#modal");
   dlg.style.width = wide ? "min(960px, calc(100vw - 32px))" : "";
   $("#modal-form").innerHTML = `<div class="dh"><h2 style="margin:0">${esc(title)}</h2><button class="btn sm" value="cancel" formnovalidate aria-label="Sluiten">✕</button></div>
-    <div class="db">${body}</div><div class="df"><button class="btn" value="cancel" formnovalidate>Annuleren</button>${onSubmit ? `<button class="btn pri" value="ok" id="m-ok">${esc(submit)}</button>` : ""}</div>`;
+    <div class="db">${body}</div><div class="df"><button class="btn" value="cancel" formnovalidate>${onSubmit ? "Annuleren" : "Sluiten"}</button>${onSubmit ? `<button class="btn pri" value="ok" id="m-ok">${esc(submit)}</button>` : ""}</div>`;
   const form = $("#modal-form");
   form.onsubmit = async (e) => {
     if (e.submitter?.value !== "ok") return;
@@ -169,7 +169,56 @@ async function router() {
 }
 const reload = () => router();
 function soon() { setTimeout(reload, 900); setTimeout(() => { reload(); refreshMe(); }, 2600); }
-function autoRefresh(ms = 4000) { S.timer = setInterval(() => { if (!$("#modal").open) reload(); }, ms); }
+function autoRefresh(ms = 4000) {
+  S.timer = setInterval(() => {
+    const a = document.activeElement;
+    const bezig = a && a.matches("textarea, input") && a.value; // niet verversen terwijl iemand typt
+    if (!$("#modal").open && !bezig && !$$("[data-opm-concept]").some((t) => t.value.trim())) reload();
+  }, ms);
+}
+
+// ---------------------------------------------------------------- opmerkingen (herbruikbaar blok)
+async function opmBlock(el, ent, id, onChange) {
+  const rows = await get(`/api/opmerkingen/${ent}/${id}`);
+  if (!el.closest("dialog")) $$('.tabs [data-tab="opmerkingen"], [data-opm-titel]').forEach((x) => (x.textContent = opmLabel(rows.length)));
+  el.innerHTML = `<div class="opm-new"><label class="sr" for="opm-${ent}-${id}">Nieuwe opmerking</label>
+      <textarea id="opm-${ent}-${id}" data-opm-concept maxlength="5000" placeholder="Schrijf een opmerking…"></textarea>
+      <div class="opm-bar"><button class="btn pri sm" data-opm-add>Plaatsen</button><span class="small muted">Ctrl/⌘ + Enter</span></div></div>
+    <ul class="opm-list">${rows.map((o) => `<li data-opm="${o.id}">
+      <div class="opm-head"><b>${esc(o.gebruiker)}</b><span class="small muted">${dt(o.ts)}${o.bewerkt ? " · bewerkt" : ""}</span>
+        ${o.mag_beheren ? `<span class="opm-act"><button class="btn sm" data-opm-edit>Wijzig</button><button class="btn sm danger" data-opm-del>Verwijder</button></span>` : ""}</div>
+      <div class="opm-tekst">${esc(o.tekst)}</div></li>`).join("") || '<li class="empty">Nog geen opmerkingen</li>'}</ul>`;
+  const refresh = () => { opmBlock(el, ent, id, onChange); onChange?.(); };
+  const ta = $("[data-opm-concept]", el);
+  const plaats = async () => {
+    if (!ta.value.trim()) return toast("Opmerking is leeg", true);
+    await act(() => post(`/api/opmerkingen/${ent}/${id}`, { tekst: ta.value }), "Opmerking geplaatst");
+    ta.value = "";
+    refresh();
+  };
+  $("[data-opm-add]", el).onclick = (e) => { e.preventDefault(); plaats(); };
+  ta.onkeydown = (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); plaats(); } };
+  $$("[data-opm-del]", el).forEach((b) => (b.onclick = async (e) => {
+    e.preventDefault();
+    if (!confirm("Opmerking verwijderen?")) return;
+    await act(() => post(`/api/opmerkingen/${b.closest("li").dataset.opm}/verwijderen`), "Opmerking verwijderd");
+    refresh();
+  }));
+  $$("[data-opm-edit]", el).forEach((b) => (b.onclick = (e) => {
+    e.preventDefault();
+    const li = b.closest("li"), tx = $(".opm-tekst", li), oud = rows.find((o) => o.id == li.dataset.opm).tekst;
+    tx.innerHTML = `<textarea data-opm-concept maxlength="5000">${esc(oud)}</textarea><div class="opm-bar"><button class="btn pri sm" data-s>Opslaan</button><button class="btn sm" data-c>Annuleren</button></div>`;
+    const t = $("textarea", tx); t.focus(); t.setSelectionRange(t.value.length, t.value.length);
+    $("[data-c]", tx).onclick = (ev) => { ev.preventDefault(); refresh(); };
+    $("[data-s]", tx).onclick = async (ev) => { ev.preventDefault(); await act(() => put(`/api/opmerkingen/${li.dataset.opm}`, { tekst: t.value }), "Opmerking gewijzigd"); refresh(); };
+  }));
+}
+function opmModal(titel, ent, id) {
+  const f = modal(`Opmerkingen — ${titel}`, '<div id="opm-modal"></div>', { wide: 1 });
+  $("#modal").addEventListener("close", () => reload(), { once: true }); // aantallen bijwerken
+  opmBlock($("#opm-modal", f), ent, id);
+}
+const opmLabel = (n) => `Opmerkingen${n ? ` (${n})` : ""}`;
 
 const head = (title, sub = "", actions = "", crumb = "") =>
   `${crumb ? `<div class="crumb">${crumb}</div>` : ""}<div class="pagehead"><h1>${title}</h1>${sub ? `<span class="sub">${sub}</span>` : ""}<div class="actions">${actions}</div></div>`;
@@ -288,13 +337,14 @@ page("klanten/(\\d+)", async (main, id) => {
   main.innerHTML = head(esc(k.naam), `${badge(k.status)} <span class="muted">${esc(k.nummer)} · KvK ${esc(k.kvk)}</span>`,
     w ? `<button class="btn" id="edit">Wijzigen</button>${k.gearchiveerd ? "" : '<button class="btn danger" id="arch">Archiveren</button>'}` : "", `<a href="#/klanten">Klanten</a> /`) +
     tabs(main, [["overzicht", "Klantkaart"], ["contacten", `Contactpersonen (${k.contactpersonen.length})`], ["contracten", `Contracten (${k.contracten.length})`],
-      ["opdrachten", `Opdrachten (${k.opdrachten.length})`], ["rfcs", `RFC's (${k.rfcs.length})`], ["tijdlijn", "Tijdlijn"], ["audit", "Audit trail"]], tab) + `<div id="tab"></div>`;
+      ["opdrachten", `Opdrachten (${k.opdrachten.length})`], ["rfcs", `RFC's (${k.rfcs.length})`], ["opmerkingen", opmLabel(k.opmerkingen_aantal)], ["tijdlijn", "Tijdlijn"], ["audit", "Audit trail"]], tab) + `<div id="tab"></div>`;
   bindTabs(main, (t) => (location.hash = `#/klanten/${id}?tab=${t}`));
   if (w) { $("#edit").onclick = () => klantForm(k); const a = $("#arch"); if (a) a.onclick = async () => { if (confirm("Klant archiveren? Records worden niet verwijderd.")) { await act(() => post(`/api/klanten/${id}/archiveren`), "Gearchiveerd"); reload(); } }; }
   const T = $("#tab");
   const cpTable = () => table([{ l: "Naam", f: (c) => `${esc(c.naam)}${c.actief ? "" : ' <span class="badge">inactief</span>'}${c.geanonimiseerd ? ' <span class="badge">geanonimiseerd</span>' : ""}` },
     { l: "Functie", k: "functie" }, { l: "E-mail", k: "email" }, { l: "Telefoon", k: "telefoon" }, { l: "Rollen", f: (c) => c.rollen.map((r) => badge(r)).join(" ") },
     { l: "AVG", k: "avg_grondslag" }, { l: "JSM", f: (c) => c.jira_account_id ? `<span class="jira">${esc(c.jira_account_id)}</span>` : sync(c.jira_sync_status) },
+    { l: "Opmerkingen", f: (c) => `<button class="btn sm" data-cpo="${c.id}" aria-label="Opmerkingen bij ${esc(c.naam)}">💬 ${c.opmerkingen_aantal || 0}</button>` },
     ...(w ? [{ l: "", f: (c) => c.geanonimiseerd ? "" : `<button class="btn sm" data-cpe="${c.id}">Wijzig</button> <button class="btn sm" data-cpa="${c.id}" data-on="${c.actief}">${c.actief ? "Deactiveer" : "Activeer"}</button> <button class="btn sm danger" data-cpx="${c.id}" title="AVG-verwijderverzoek">Anonimiseer</button>` }] : [])], k.contactpersonen);
   const ctTable = () => table([{ l: "Nummer", f: (c) => `<a href="#/contracten/${c.id}">${esc(c.nummer)}</a>` }, { l: "Soort", k: "soort" }, { l: "Looptijd", f: (c) => `${d(c.startdatum)} – ${c.onbepaalde_tijd ? "onbepaald" : d(c.einddatum)}` },
     { l: "Duur", num: 1, f: (c) => c.duur_maanden == null ? "—" : c.duur_maanden + " mnd" }, { l: "Waarde", num: 1, f: (c) => c.waarde_verborgen ? hidden : eur(c.waarde) },
@@ -312,6 +362,7 @@ page("klanten/(\\d+)", async (main, id) => {
       <div class="card"><h2>Recente activiteit</h2>${timeline(k.tijdlijn.slice(0, 8))}</div></div></div>`;
   } else if (tab === "contacten") {
     T.innerHTML = `<div class="card">${w ? '<div class="filters"><button class="btn pri" id="cpn">Nieuwe contactpersoon</button></div>' : ""}${cpTable()}</div>`;
+    $$("[data-cpo]").forEach((b) => (b.onclick = () => { const c = k.contactpersonen.find((x) => x.id == b.dataset.cpo); opmModal(c.naam, "contactpersoon", c.id); }));
     if (w) {
       $("#cpn").onclick = () => cpForm(k.id);
       $$("[data-cpe]").forEach((b) => (b.onclick = () => cpForm(k.id, k.contactpersonen.find((c) => c.id == b.dataset.cpe))));
@@ -330,6 +381,9 @@ page("klanten/(\\d+)", async (main, id) => {
   } else if (tab === "tijdlijn") {
     T.innerHTML = `<div class="card">${w ? `<div class="form" style="margin-bottom:12px"><label>Type<select id="at">${S.keuzes.activiteit_type.map((t) => `<option>${t}</option>`).join("")}</select></label><label class="full">Notitie<textarea id="ax" placeholder="Wat is er besproken?"></textarea></label></div><button class="btn pri" id="aadd">Toevoegen</button><hr style="border:0;border-top:1px solid var(--line);margin:16px 0">` : ""}${timeline(k.tijdlijn)}</div>`;
     if (w) $("#aadd").onclick = async () => { await act(() => post(`/api/klanten/${id}/activiteiten`, { type: $("#at").value, tekst: $("#ax").value }), "Toegevoegd"); reload(); };
+  } else if (tab === "opmerkingen") {
+    T.innerHTML = '<div class="card" id="opm"></div>';
+    await opmBlock($("#opm"), "klant", k.id);
   } else if (tab === "audit") T.innerHTML = `<div class="card">${await auditHtml("klant", id)}</div>`;
 });
 const timeline = (items) => items.length ? `<ul class="timeline">${items.map((t) => `<li><span class="small muted">${dt(t.ts)}</span><span>${badge(t.type, t.bron === "Jira" || t.type === "Jira" ? "acc" : "")} ${esc(t.tekst)} <span class="small muted">— ${esc(t.door)}</span></span></li>`).join("")}</ul>` : '<div class="empty">Nog geen activiteit</div>';
@@ -385,7 +439,7 @@ page("contracten/(\\d+)", async (main, id) => {
     w ? `<button class="btn" id="edit">Wijzigen</button>${S.user.rol !== "finance" ? '<button class="btn" id="verl">Verlengen</button><button class="btn" id="add">Addendum</button>' : ""}` : "", '<a href="#/contracten">Contracten</a> /') +
     (!actief ? `<div class="alert ${c.status === "Concept" ? "info" : "bad"}">Status ${esc(c.status)}: er kunnen ${c.status === "Concept" ? "nog " : ""}geen nieuwe RFC's of opdrachten aan dit contract worden gekoppeld.</div>` : "") +
     (c.uren_pct >= 75 ? `<div class="alert ${c.uren_pct >= 90 ? "bad" : ""}">Urenbudget voor ${n0(c.uren_pct)}% verbruikt.</div>` : "") +
-    tabs(main, [["overzicht", "Overzicht"], ["versies", `Versies (${c.versies.length})`], ["audit", "Audit trail"]], tab) + '<div id="tab"></div>';
+    tabs(main, [["overzicht", "Overzicht"], ["versies", `Versies (${c.versies.length})`], ["opmerkingen", opmLabel(c.opmerkingen_aantal)], ["audit", "Audit trail"]], tab) + '<div id="tab"></div>';
   bindTabs(main, (t) => (location.hash = `#/contracten/${id}?tab=${t}`));
   if (w) {
     $("#edit").onclick = () => contractForm(c, true);
@@ -410,6 +464,9 @@ page("contracten/(\\d+)", async (main, id) => {
       <div class="card" style="margin-top:16px"><h2>RFC's</h2>${rfcTable(c.rfcs.map((r) => ({ ...r, klantnaam: c.klantnaam, contractnummer: c.nummer })))}</div>`;
   } else if (tab === "versies") {
     T.innerHTML = `<div class="card">${table([{ l: "Versie", k: "versie" }, { l: "Soort", k: "soort_wijziging" }, { l: "Toelichting", k: "toelichting" }, { l: "Wijzigingen", f: (v) => esc(Object.entries(JSON.parse(v.snapshot || "{}")).map(([k, x]) => `${k}: ${x}`).join(", ")) }, { l: "Door", k: "gebruiker" }, { l: "Datum", f: (v) => dt(v.ts) }], c.versies)}</div>`;
+  } else if (tab === "opmerkingen") {
+    T.innerHTML = '<div class="card" id="opm"></div>';
+    await opmBlock($("#opm"), "contract", c.id);
   } else T.innerHTML = `<div class="card">${await auditHtml("contract", id)}</div>`;
 });
 
@@ -454,7 +511,9 @@ page("opdrachten/(\\d+)", async (main, id) => {
       <div class="card"><h2>Uitvoering (uit Jira)</h2><div class="grid g2"><div class="stat"><div class="l">Bestede uren</div><div class="v">${n0(o.bestede_uren)}</div><div class="small muted">van ${n0(o.begrote_uren)} begroot</div></div>
       <div class="stat"><div class="l">Voortgang</div><div class="v">${n0(o.voortgang)}%</div><div class="small muted">afgeronde issues</div></div></div>${o.begrote_uren ? bar(100 * o.bestede_uren / o.begrote_uren) : ""}</div></div>
       <div class="card" style="margin-top:16px"><h2>RFC's op deze opdracht</h2>${rfcTable(o.rfcs.map((r) => ({ ...r, klantnaam: o.klantnaam, contractnummer: o.contractnummer })))}</div>
+      <div class="card" style="margin-top:16px"><h2 data-opm-titel>${opmLabel(o.opmerkingen_aantal)}</h2><div id="opm"></div></div>
       <div class="card" style="margin-top:16px"><h2>Audit trail</h2>${await auditHtml("opdracht", id)}</div>`;
+  await opmBlock($("#opm"), "opdracht", o.id);
   if (w) { $("#edit").onclick = () => opdrachtForm(o, true); const a = $("#af"); if (a) a.onclick = async () => { await act(() => post(`/api/opdrachten/${id}/afronden`), "Opdracht afgerond"); reload(); }; }
 });
 
@@ -514,7 +573,7 @@ page("rfcs/(\\d+)", async (main, id) => {
     `${r.mag_schrijven ? '<button class="btn" id="edit">Wijzigen</button><button class="btn" id="toetsb">Contracttoets opnieuw</button>' : ""}${r.jira_key ? `<a class="btn" href="#/jira?issue=${esc(r.jira_key)}">Open in Jira ↗</a>` : ""}`, '<a href="#/rfcs">RFC\'s</a> /') +
     (r.jira_sync_status !== "gesynchroniseerd" ? `<div class="alert ${r.jira_sync_status === "fout" ? "bad" : ""}">Jira-synchronisatie: ${esc(r.jira_sync_status)}${r.jira_sync_status === "wachtend" ? " — het Change-issue wordt aangemaakt zodra Jira bereikbaar is." : ""}</div>` : "") +
     (r.cab_vereist && !r.cab_besluit ? '<div class="alert">Risicoscore ≥ 15: CAB-behandeling vereist.</div>' : "") +
-    tabs(main, [["overzicht", "Overzicht"], ["ia", `Impactanalyse (${r.impactanalyses.length})`], ["audit", "Audit trail"]], tab) + '<div id="tab"></div>';
+    tabs(main, [["overzicht", "Overzicht"], ["ia", `Impactanalyse (${r.impactanalyses.length})`], ["opmerkingen", opmLabel(r.opmerkingen_aantal)], ["audit", "Audit trail"]], tab) + '<div id="tab"></div>';
   bindTabs(main, (t) => (location.hash = `#/rfcs/${id}?tab=${t}`));
   if (r.mag_schrijven) { $("#edit").onclick = () => rfcForm(r, true); $("#toetsb").onclick = async () => { await act(() => post(`/api/rfcs/${id}/toets`), "Contracttoets uitgevoerd"); reload(); }; }
   const T = $("#tab");
@@ -535,6 +594,10 @@ page("rfcs/(\\d+)", async (main, id) => {
       <dt>Planning</dt><dd>${dash(x.impact_planning)}</dd><dt>Kosten / uren</dt><dd>${S.user.waarde_zichtbaar ? eur(x.kosten) : hidden} / ${n0(x.uren)} u</dd><dt>Risico</dt><dd><b>${x.risicoscore}</b> (kans ${x.kans} × impact ${x.impact}) ${x.risicoscore >= 15 ? badge("CAB vereist", "bad") : ""}</dd>
       <dt>Contract / SLA</dt><dd>${dash(x.impact_contract)}</dd><dt>Security & privacy</dt><dd>${dash(x.security_privacy)} ${x.dpia_nodig ? badge("DPIA nodig", "warn") : ""}</dd><dt>Terugvalplan</dt><dd>${dash(x.terugvalplan)}</dd></dl>
       <div><h3>Vergelijking met contract</h3>${cvHtml(x.contractverschil)}</div></div></div>`).join("") : '<div class="card empty">De impactanalyse wordt in Jira ingevuld (formulier op het Change-issue) en verschijnt hier automatisch.</div>';
+  } else if (tab === "opmerkingen") {
+    T.innerHTML = '<div class="card" id="opm"></div>';
+    await opmBlock($("#opm"), "rfc", r.id);
+    return; // geen auto-refresh tijdens het schrijven van opmerkingen
   } else T.innerHTML = `<div class="card">${await auditHtml("rfc", id)}</div>`;
   autoRefresh(5000);
 });
