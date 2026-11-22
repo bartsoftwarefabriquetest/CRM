@@ -32,7 +32,8 @@ h2 { font-size: 15px; margin: 0 0 10px; }
 h3 { font-size: 13px; margin: 0 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 
 /* layout */
-.shell { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+.shell { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 100vh; }
+.shell > div { min-width: 0; } /* brede tabellen scrollen binnen hun kaart i.p.v. de pagina op te rekken */
 nav.side { background: var(--panel); border-right: 1px solid var(--line); padding: 14px 10px; position: sticky; top: 0; height: 100vh; overflow: auto; }
 .brand { font-weight: 700; padding: 4px 10px 14px; display: flex; gap: 8px; align-items: center; }
 .brand i { width: 22px; height: 22px; border-radius: 6px; background: var(--accent); display: inline-block; }

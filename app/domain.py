@@ -281,7 +281,35 @@ def klanten(user, zoek=None, status=None, archief=False):
     if status:
         sql += " AND k.status=?"
         args.append(status)
-    return q(sql + " ORDER BY k.naam", args)
+    rows = q(sql + " ORDER BY k.naam", args)
+    stats = offerte_stats(user)
+    for r in rows:
+        r["offertes"] = stats.get(r["id"], offerte_stats_leeg())
+    return rows
+
+
+def offerte_stats_leeg():
+    return {"totaal": 0, "concept": 0, "uitgebracht": 0, "lopend": 0, "gewonnen": 0, "afgewezen": 0,
+            "scoringspct": None, "waarde_gewonnen": None, "waarde_uitgebracht": None}
+
+
+def offerte_stats(user, klant_id=None):
+    """Per klant: uitgebracht (Verstuurd/Geaccepteerd/Afgewezen), gewonnen, afgewezen, lopend, concept en scoringspercentage."""
+    sql = """SELECT klant_id, COUNT(*) totaal,
+               SUM(status='Concept') concept, SUM(status='Verstuurd') lopend,
+               SUM(status='Geaccepteerd') gewonnen, SUM(status='Afgewezen') afgewezen,
+               SUM(CASE WHEN status='Geaccepteerd' THEN COALESCE(waarde,0) END) waarde_gewonnen,
+               SUM(CASE WHEN status!='Concept' THEN COALESCE(waarde,0) END) waarde_uitgebracht
+             FROM offertes""" + (" WHERE klant_id=?" if klant_id else "") + " GROUP BY klant_id"
+    out = {}
+    for r in q(sql, (klant_id,) if klant_id else ()):
+        beslist = r["gewonnen"] + r["afgewezen"]
+        s = {**r, "uitgebracht": r["totaal"] - r["concept"],
+             "scoringspct": round(100 * r["gewonnen"] / beslist) if beslist else None}
+        if user["rol"] not in WAARDE_ZICHTBAAR:
+            s["waarde_gewonnen"] = s["waarde_uitgebracht"] = None
+        out[r.pop("klant_id")] = s
+    return out
 
 
 def klant(user, kid):
@@ -301,6 +329,12 @@ def klant(user, kid):
     k["tijdlijn"] = tijdlijn(kid)
     k["mag_schrijven"] = mag(user, "schrijven", "klant", k)
     k["opmerkingen_aantal"] = opm_tellingen("klant", [kid]).get(kid, 0)
+    k["offerte_stats"] = offerte_stats(user, kid).get(kid, offerte_stats_leeg())
+    k["offertes"] = [_offerte_out(o) for o in q("""SELECT o.*, r.jira_key, r.titel FROM offertes o JOIN rfcs r ON r.id=o.rfc_id
+                                                    WHERE o.klant_id=? ORDER BY o.id DESC""", (kid,))]
+    if user["rol"] not in WAARDE_ZICHTBAAR:
+        for o in k["offertes"]:
+            o["waarde"] = None
     return k
 
 

@@ -294,7 +294,12 @@ page("klanten", async (main) => {
     <label class="small"><input type="checkbox" id="fa" ${S.qs.archief ? "checked" : ""}> Archief</label></div>
     ${table([{ l: "Nr", k: "nummer" }, { l: "Naam", f: (r) => `<a href="#/klanten/${r.id}">${esc(r.naam)}</a>` }, { l: "KvK", k: "kvk" }, { l: "Plaats", k: "plaats" }, { l: "Branche", k: "branche" },
       { l: "Accountmanager", k: "accountmanager" }, { l: "Status", f: (r) => badge(r.status) }, { l: "Contracten", num: 1, k: "actieve_contracten" }, { l: "Open RFC's", num: 1, k: "open_rfcs" },
-      { l: "Jira", f: (r) => sync(r.jira_sync_status) }], rows, (r) => "#/klanten/" + r.id)}</div>`;
+      { l: "Offertes", num: 1, f: (r) => r.offertes.uitgebracht || '<span class="muted">0</span>' },
+      { l: "Gewonnen", num: 1, f: (r) => r.offertes.gewonnen ? badge(r.offertes.gewonnen, "ok") : '<span class="muted">0</span>' },
+      { l: "Afgewezen", num: 1, f: (r) => r.offertes.afgewezen ? badge(r.offertes.afgewezen, "bad") : '<span class="muted">0</span>' },
+      { l: "Score", num: 1, f: (r) => r.offertes.scoringspct == null ? '<span class="muted">—</span>' : r.offertes.scoringspct + "%" },
+      { l: "Jira", f: (r) => sync(r.jira_sync_status) }], rows, (r) => "#/klanten/" + r.id)}
+    <p class="small muted" style="margin:10px 0 0">Offertes = uitgebracht (verstuurd, gewonnen of afgewezen; concepten niet meegeteld). Score = gewonnen ÷ (gewonnen + afgewezen).</p></div>`;
   const go = () => (location.hash = `#/klanten?zoek=${encodeURIComponent($("#fz").value)}&status=${encodeURIComponent($("#fs").value)}${$("#fa").checked ? "&archief=1" : ""}`);
   $("#fz").onchange = go; $("#fs").onchange = go; $("#fa").onchange = go;
   $("#new").onclick = () => klantForm();
@@ -413,7 +418,7 @@ page("klanten/(\\d+)", async (main, id) => {
   main.innerHTML = head(esc(k.naam), `${badge(k.status)} <span class="muted">${esc(k.nummer)} · KvK ${esc(k.kvk)}</span>`,
     w ? `<button class="btn" id="edit">Wijzigen</button>${k.gearchiveerd ? "" : '<button class="btn danger" id="arch">Archiveren</button>'}` : "", `<a href="#/klanten">Klanten</a> /`) +
     tabs(main, [["overzicht", "Klantkaart"], ["contacten", `Contactpersonen (${k.contactpersonen.length})`], ["contracten", `Contracten (${k.contracten.length})`],
-      ["opdrachten", `Opdrachten (${k.opdrachten.length})`], ["rfcs", `RFC's (${k.rfcs.length})`], ["opmerkingen", opmLabel(k.opmerkingen_aantal)], ["tijdlijn", "Tijdlijn"], ["audit", "Audit trail"]], tab) + `<div id="tab"></div>`;
+      ["opdrachten", `Opdrachten (${k.opdrachten.length})`], ["rfcs", `RFC's (${k.rfcs.length})`], ["offertes", `Offertes (${k.offertes.length})`], ["opmerkingen", opmLabel(k.opmerkingen_aantal)], ["tijdlijn", "Tijdlijn"], ["audit", "Audit trail"]], tab) + `<div id="tab"></div>`;
   bindTabs(main, (t) => (location.hash = `#/klanten/${id}?tab=${t}`));
   if (w) { $("#edit").onclick = () => klantForm(k); const a = $("#arch"); if (a) a.onclick = async () => { if (confirm("Klant archiveren? Records worden niet verwijderd.")) { await act(() => post(`/api/klanten/${id}/archiveren`), "Gearchiveerd"); reload(); } }; }
   const T = $("#tab");
@@ -435,6 +440,7 @@ page("klanten/(\\d+)", async (main, id) => {
         <dt>Factuuradres</dt><dd>${dash(k.factuuradres)}</dd><dt>BTW</dt><dd>${dash(k.btw)}</dd><dt>Branche</dt><dd>${dash(k.branche)}</dd><dt>Accountmanager</dt><dd>${dash(k.accountmanager)}</dd>
         <dt>JSM Organization</dt><dd>${k.jira_org_id ? `<span class="jira">org ${esc(k.jira_org_id)}</span>` : "—"}</dd><dt>Assets-object</dt><dd>${k.jira_key ? `<span class="jira">${esc(k.jira_key)}</span>` : "—"}</dd><dt>Sync</dt><dd>${sync(k.jira_sync_status)}</dd></dl></div>
       <div class="card"><h2>Contactpersonen</h2>${k.contactpersonen.filter((c) => c.actief).map((c) => `<div style="padding:4px 0"><a href="#/contactpersonen/${c.id}"><b>${esc(c.naam)}</b></a> <span class="muted small">${esc(c.functie || "")}</span><br><span class="small">${c.rollen.map((r) => badge(r)).join(" ")}</span></div>`).join("") || '<div class="empty">Geen</div>'}</div>
+      <a class="card tile" href="#/klanten/${k.id}?tab=offertes"><h2>Offertes</h2>${offerteStatsHtml(k.offerte_stats, true)}</a>
       <div class="card"><h2>Recente activiteit</h2>${timeline(k.tijdlijn.slice(0, 8))}</div></div></div>`;
   } else if (tab === "contacten") {
     T.innerHTML = `<div class="card">${w ? '<div class="filters"><button class="btn pri" id="cpn">Nieuwe contactpersoon</button></div>' : ""}${cpTable()}</div>`;
@@ -457,6 +463,12 @@ page("klanten/(\\d+)", async (main, id) => {
   } else if (tab === "tijdlijn") {
     T.innerHTML = `<div class="card">${w ? `<div class="form" style="margin-bottom:12px"><label>Type<select id="at">${S.keuzes.activiteit_type.map((t) => `<option>${t}</option>`).join("")}</select></label><label class="full">Notitie<textarea id="ax" placeholder="Wat is er besproken?"></textarea></label></div><button class="btn pri" id="aadd">Toevoegen</button><hr style="border:0;border-top:1px solid var(--line);margin:16px 0">` : ""}${timeline(k.tijdlijn)}</div>`;
     if (w) $("#aadd").onclick = async () => { await act(() => post(`/api/klanten/${id}/activiteiten`, { type: $("#at").value, tekst: $("#ax").value }), "Toegevoegd"); reload(); };
+  } else if (tab === "offertes") {
+    T.innerHTML = `<div class="card" style="margin-bottom:16px">${offerteStatsHtml(k.offerte_stats)}</div><div class="card">${table([
+      { l: "RFC", f: (o) => `<a href="#/rfcs/${o.rfc_id}">${esc(o.jira_key || "#" + o.rfc_id)}</a>` }, { l: "Omschrijving", k: "omschrijving" },
+      { l: "Waarde", num: 1, f: (o) => S.user.waarde_zichtbaar ? eur(o.waarde) : hidden },
+      { l: "Status", f: (o) => badge(o.status, { Geaccepteerd: "ok", Afgewezen: "bad", Verstuurd: "warn" }[o.status] || "acc") },
+      { l: "Document", f: offerteLink }, { l: "Aangemaakt", f: (o) => d(o.ts) }], k.offertes, (o) => "#/rfcs/" + o.rfc_id)}</div>`;
   } else if (tab === "opmerkingen") {
     T.innerHTML = '<div class="card" id="opm"></div>';
     await opmBlock($("#opm"), "klant", k.id);
@@ -700,6 +712,15 @@ function cvHtml(cv) {
 
 // ================================================================ MEERWERK & SIGNALEN
 // ---------------------------------------------------------------- offertes (met link naar SharePoint/Confluence)
+function offerteStatsHtml(s, compact) {
+  const tegel = (l, v, tone) => `<div class="stat"><div class="l">${l}</div><div class="v"${tone ? ` style="color:var(--${tone})"` : ""}>${v}</div></div>`;
+  const waarde = S.user.waarde_zichtbaar && s.waarde_gewonnen != null
+    ? `<p class="small muted" style="margin:10px 0 0">Gewonnen waarde ${eur(s.waarde_gewonnen)} van ${eur(s.waarde_uitgebracht)} uitgebracht</p>` : "";
+  return `<div class="grid ${compact ? "g3" : "g4"} offstats">
+    ${tegel("Uitgebracht", s.uitgebracht)}${tegel("Gewonnen", s.gewonnen, s.gewonnen ? "ok" : "")}${tegel("Afgewezen", s.afgewezen, s.afgewezen ? "bad" : "")}
+    ${compact ? "" : tegel("Scoringspercentage", s.scoringspct == null ? "—" : s.scoringspct + "%")}</div>
+    <p class="small muted" style="margin:8px 0 0">${s.lopend} lopend (verstuurd) · ${s.concept} concept${compact && s.scoringspct != null ? ` · score ${s.scoringspct}%` : ""}</p>${waarde}`;
+}
 const BRON_ICOON = { SharePoint: "📄", Confluence: "📘", Document: "🔗" };
 const offerteLink = (o) => o.link
   ? `<a href="${esc(o.link)}" target="_blank" rel="noopener noreferrer" title="${esc(o.link)}">${BRON_ICOON[o.link_bron] || "🔗"} ${esc(o.link_bron || "Document")} ↗</a>`
